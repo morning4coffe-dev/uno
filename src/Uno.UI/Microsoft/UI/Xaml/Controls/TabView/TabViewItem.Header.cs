@@ -3,6 +3,7 @@
 // MUX Reference: TabViewItem.h, commit 27052f7
 
 using Uno.Disposables;
+using Uno.UI.Helpers.WinUI;
 using Windows.UI.Xaml.Controls;
 
 namespace Microsoft.UI.Xaml.Controls;
@@ -17,9 +18,9 @@ public partial class TabViewItem
 
 	private bool m_firstTimeSettingToolTip = true;
 
-	private readonly SerialDisposable m_closeButtonClickRevoker = new SerialDisposable();
-	private readonly SerialDisposable m_tabDragStartingRevoker = new SerialDisposable();
-	private readonly SerialDisposable m_tabDragCompletedRevoker = new SerialDisposable();
+	private readonly SerialDisposable m_closeButtonClickRevoker = new();
+	private readonly SerialDisposable m_tabDragStartingRevoker = new();
+	private readonly SerialDisposable m_tabDragCompletedRevoker = new();
 
 	private bool m_hasPointerCapture = false;
 	private bool m_isMiddlePointerButtonPressed = false;
@@ -29,4 +30,6 @@ public partial class TabViewItem
 	private object m_shadow = null;
 
 	private TabView m_parentTabView = null;
+
+	private DispatcherHelper m_dispatcherHelper;
 }
