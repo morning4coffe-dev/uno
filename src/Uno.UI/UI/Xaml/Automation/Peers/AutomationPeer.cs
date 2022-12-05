@@ -104,6 +104,8 @@ namespace Windows.UI.Xaml.Automation.Peers
 
 		public AutomationPeer GetLabeledBy() => GetLabeledByCore();
 
+		protected internal IRawElementProviderSimple ProviderFromPeer(AutomationPeer peer) => new IRawElementProviderSimple(peer);
+
 		#endregion
 
 		#region Overrides
@@ -242,13 +244,6 @@ namespace Windows.UI.Xaml.Automation.Peers
 		[Uno.NotImplemented]
 		public void InvalidatePeer()
 		{
-		}
-
-		// This is here to make the method internal!
-		[global::Uno.NotImplemented("__ANDROID__", "__IOS__", "NET461", "__WASM__", "__SKIA__", "__NETSTD_REFERENCE__", "__MACOS__")]
-		protected internal global::Windows.UI.Xaml.Automation.Provider.IRawElementProviderSimple ProviderFromPeer(global::Windows.UI.Xaml.Automation.Peers.AutomationPeer peer)
-		{
-			throw new global::System.NotImplementedException("The member IRawElementProviderSimple AutomationPeer.ProviderFromPeer(AutomationPeer peer) is not implemented in Uno.");
 		}
 		#endregion
 	}
