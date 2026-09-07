@@ -16,6 +16,7 @@ using Microsoft.UI.Xaml;
 using Uno.Disposables;
 using Uno.UI.Dispatching;
 using Uno.UI.Hosting;
+using Uno.UI.Composition;
 using Uno.UI.Runtime.Skia.WebAssembly.Browser;
 
 namespace Uno.UI.Runtime.Skia;
@@ -114,7 +115,8 @@ internal partial class WebAssemblyWindowWrapper : NativeWindowWrapperBase
 							var compositionTarget = (CompositionTarget)XamlRoot?.Content?.Visual.CompositionTarget!;
 							var host = (WebAssemblyBrowserHost)XamlRootMap.GetHostForRoot(XamlRoot!)!;
 							compositionTarget.FrameRendered += CompositionTargetOnFrameRendered;
-							((IXamlRootHost)host).InvalidateRender();
+							// A native redraw may reuse a cached picture and never raise FrameRendered.
+							((ICompositionTarget)compositionTarget).RequestNewFrame();
 							void CompositionTargetOnFrameRendered()
 							{
 								compositionTarget.FrameRendered -= CompositionTargetOnFrameRendered;
