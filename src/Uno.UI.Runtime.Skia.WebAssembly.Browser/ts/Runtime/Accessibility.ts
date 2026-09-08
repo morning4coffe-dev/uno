@@ -575,6 +575,21 @@ namespace Uno.UI.Runtime.Skia {
 			Accessibility.debugLog(`[A11y] TS updateAriaLabel: handle=${handle} label='${automationId}'`);
 			const element = Accessibility.getSemanticElementByHandle(handle);
 			if (element) {
+				const textKind = element.dataset.unoTextKind;
+				if (textKind === "body" || textKind === "heading") {
+					const text = textKind === "heading" ? (automationId ?? "").trim() : (automationId ?? "");
+					// Preserve semantic descendants such as inline links while updating the owned text node.
+					const first = element.firstChild;
+					if (first?.nodeType === Node.TEXT_NODE) {
+						first.textContent = text;
+					} else {
+						element.insertBefore(document.createTextNode(text), first);
+					}
+					if (textKind === "body") {
+						element.removeAttribute("aria-label");
+						return;
+					}
+				}
 				// Omit an empty/whitespace aria-label rather than emitting aria-label="" (which screen
 				// readers announce as "blank"); a nameless control must carry no aria-label attribute.
 				// Write the TRIMMED value so live-sync matches the creation-time path

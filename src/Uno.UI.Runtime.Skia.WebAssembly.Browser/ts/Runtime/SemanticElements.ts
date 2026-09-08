@@ -504,6 +504,7 @@ namespace Uno.UI.Runtime.Skia {
 			const trueLevel = Math.max(1, Math.min(9, level));
 			const tagLevel = Math.min(6, trueLevel);
 			const element = document.createElement(`h${tagLevel}`) as HTMLHeadingElement;
+			element.dataset.unoTextKind = "heading";
 			this.applyCommonStyles(element, x, y, width, height, handle);
 
 			// A heading is a structural/rotor landmark, not a tab stop: it gets NO tabindex (T014).
@@ -540,6 +541,7 @@ namespace Uno.UI.Runtime.Skia {
 			_isFocusable: boolean
 		): void {
 			const element = document.createElement(isBlock ? 'p' : 'span');
+			element.dataset.unoTextKind = "body";
 			this.applyCommonStyles(element, x, y, width, height, handle);
 
 			// Standalone body text: non-interactive, not a tab stop. Only textContent is exposed
