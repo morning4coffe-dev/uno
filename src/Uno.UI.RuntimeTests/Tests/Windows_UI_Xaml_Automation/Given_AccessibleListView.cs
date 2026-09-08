@@ -146,6 +146,51 @@ namespace Uno.UI.RuntimeTests.Tests.Windows_UI_Xaml_Automation
 #endif
 #if __SKIA__
 
+		[TestMethod]
+		[DataRow(false)]
+		[DataRow(true)]
+		[RunsOnUIThread]
+		[PlatformCondition(ConditionMode.Include, RuntimeTestPlatforms.SkiaWasm)]
+		public async Task When_Template_Children_Removed_Then_Row_Name_Changes(bool removeSubtree)
+		{
+			var title = new TextBlock { Text = "First" };
+			var status = new TextBlock { Text = "Active" };
+			UIElement removable = removeSubtree ? new Border { Child = status } : status;
+			var content = new StackPanel { Children = { title, removable } };
+			var list = new ListView
+			{
+				Width = 320,
+				Height = 240,
+				ItemsSource = new[] { new object() },
+				ItemTemplate = new DataTemplate(() => content)
+			};
+			try
+			{
+				await UITestHelper.Load(list);
+				EnableAccessibilityThroughDom();
+				await UITestHelper.WaitFor(() => list.ContainerFromIndex(0) is ListViewItem);
+				var item = (ListViewItem)list.ContainerFromIndex(0);
+				await UITestHelper.WaitFor(() => GetSemanticAttribute(item, "aria-label") == "First, Active");
+				await UITestHelper.WaitForIdle();
+
+				content.Children.Remove(removable);
+				await UITestHelper.WaitFor(() => GetSemanticAttribute(item, "aria-label") == "First");
+				content.Children.Clear();
+				await UITestHelper.WaitFor(() => !SemanticElementHasAttribute(item, "aria-label"));
+				status.Text = "Changed";
+				if (removable is Border border)
+				{
+					border.Child = null;
+				}
+				content.Children.Add(status);
+				await UITestHelper.WaitFor(() => GetSemanticAttribute(item, "aria-label") == "Changed");
+			}
+			finally
+			{
+				TestServices.WindowHelper.WindowContent = null;
+			}
+		}
+
 		/// <summary>
 		/// T067/FR-016 (WASM DOM): a ListView emits a composite container with role="listbox". Under the roving
 		/// tab model the container is not itself a tab stop (tabindex must not be "0").

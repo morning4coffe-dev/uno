@@ -1238,7 +1238,10 @@ namespace Microsoft.UI.Xaml.Controls
 				// changing the DC can cause the data-bound property to be unnecessarily re-evaluated with an inherited DC from the visual parent.
 				// We also need to set value to null explicitly, because just unsetting would cause the DataContext to be inherited from the visual parent,
 				// which then causes issues like #12845.
-				contentControl.SetValue(DataContextProperty, null);
+				if (!isOwnContainer)
+				{
+					contentControl.SetValue(DataContextProperty, null);
+				}
 			}
 		}
 

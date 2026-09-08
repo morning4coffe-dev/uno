@@ -522,6 +522,10 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 				this.Log().Error($"[A11y] OnChildRemoved failed for {child.GetType().Name}: {ex.Message}", ex);
 			}
 		}
+		finally
+		{
+			QueueVirtualizedAncestorNameRefresh(parent);
+		}
 	}
 
 	private void TryRegisterVirtualizedContainer(UIElement element)

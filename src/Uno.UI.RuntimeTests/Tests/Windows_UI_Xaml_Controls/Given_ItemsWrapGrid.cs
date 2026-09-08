@@ -305,6 +305,51 @@ public class Given_ItemsWrapGrid
 	}
 
 	[TestMethod]
+	[DataRow(Orientation.Vertical)]
+	[DataRow(Orientation.Horizontal)]
+	public async Task When_Own_Container_Scrolls_Unloads_And_Reattaches(Orientation orientation)
+	{
+		var (grid, panel) = CreateGrid(orientation, 2);
+		grid.ItemTemplate = null;
+		var text = new TextBlock { Height = 80, Width = 80 };
+		text.SetBinding(TextBlock.TextProperty, new Binding());
+		var first = new GridViewItem { DataContext = "own first", Content = text };
+		var items = new[] { first }.Concat(Enumerable.Range(1, 100)
+			.Select(index => new GridViewItem { Content = index.ToString(CultureInfo.InvariantCulture) })).ToArray();
+		grid.ItemsSource = items;
+		try
+		{
+			await UITestHelper.Load(grid);
+			await WindowHelper.WaitForIdle();
+			Assert.AreEqual("own first", text.Text);
+
+			WindowHelper.WindowContent = null;
+			await WindowHelper.WaitForIdle();
+			Assert.AreEqual("own first", first.DataContext, "Unloading must preserve the application's container state.");
+			await UITestHelper.Load(grid);
+			await WindowHelper.WaitForIdle();
+			Assert.AreSame(first, grid.ContainerFromIndex(0));
+			Assert.AreSame(text, first.Content);
+			Assert.AreEqual("own first", text.Text);
+			var scroll = Descendants<ScrollViewer>(grid).Single();
+			scroll.ChangeView(orientation == Orientation.Horizontal ? 3200 : null,
+				orientation == Orientation.Vertical ? 3200 : null, null, disableAnimation: true);
+			await WindowHelper.WaitFor(() => panel.FirstVisibleIndex > 0);
+			Assert.AreEqual("own first", first.DataContext, "Virtualization must not erase application-owned data.");
+			scroll.ChangeView(0, 0, null, disableAnimation: true);
+			await WindowHelper.WaitFor(() => panel.FirstVisibleIndex == 0);
+			Assert.AreEqual("own first", text.Text);
+			grid.ItemsSource = null;
+			await WindowHelper.WaitForIdle();
+			Assert.AreEqual("own first", first.DataContext, "Removing the source must not erase application-owned data.");
+		}
+		finally
+		{
+			WindowHelper.WindowContent = null;
+		}
+	}
+
+	[TestMethod]
 	[DataRow(Orientation.Vertical, false)]
 	[DataRow(Orientation.Horizontal, false)]
 	[DataRow(Orientation.Vertical, true)]
