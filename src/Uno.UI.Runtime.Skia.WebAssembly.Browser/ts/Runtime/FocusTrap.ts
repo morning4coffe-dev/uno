@@ -32,7 +32,7 @@ namespace Uno.UI.Runtime.Skia {
 			if (semanticsRoot && modalElement) {
 				const allElements = semanticsRoot.querySelectorAll("[id^='uno-semantics-']");
 				allElements.forEach((el: HTMLElement) => {
-					if (el !== modalElement && !modalElement.contains(el)) {
+					if (el !== modalElement && !modalElement.contains(el) && !el.contains(modalElement)) {
 						hiddenElements.push({
 							element: el,
 							originalAriaHidden: el.getAttribute("aria-hidden"),
@@ -57,6 +57,7 @@ namespace Uno.UI.Runtime.Skia {
 					const wrapped = FocusTrap.handleTrapTab(modalHandle, e.shiftKey);
 					if (wrapped) {
 						e.preventDefault();
+						e.stopImmediatePropagation();
 					}
 				}
 			};

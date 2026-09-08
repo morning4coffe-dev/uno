@@ -57,7 +57,7 @@ namespace Microsoft.UI.Xaml.Controls
 				case var itemAdd when itemAdd.ElementType == CollectionChangedOperation.Element.Item &&
 							itemAdd.Action == NotifyCollectionChangedAction.Add &&
 							itemAdd.StartingIndex.Section == section &&
-							itemAdd.EndIndex.Row <= row:
+							itemAdd.StartingIndex.Row <= row:
 					row += itemAdd.Range;
 					break;
 

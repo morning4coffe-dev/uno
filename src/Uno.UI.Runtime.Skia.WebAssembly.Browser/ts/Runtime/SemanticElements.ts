@@ -890,6 +890,10 @@ namespace Uno.UI.Runtime.Skia {
 		 * Updates the selected state of a list item element.
 		 */
 		public static updateSelectionState(handle: number, selected: boolean): void {
+			const pending = SemanticElements.virtualizedItems.get(handle);
+			if (pending) {
+				pending.selected = selected;
+			}
 			const element = document.getElementById(`uno-semantics-${handle}`);
 			if (element) {
 				element.setAttribute('aria-selected', String(selected));
@@ -900,6 +904,10 @@ namespace Uno.UI.Runtime.Skia {
 		 * Updates the disabled state of an element.
 		 */
 		public static updateDisabledState(handle: number, disabled: boolean): void {
+			const pending = SemanticElements.virtualizedItems.get(handle);
+			if (pending) {
+				pending.disabled = disabled;
+			}
 			const element = document.getElementById(`uno-semantics-${handle}`) as HTMLButtonElement | HTMLInputElement;
 			if (element) {
 				if ('disabled' in element) {
@@ -1427,6 +1435,33 @@ namespace Uno.UI.Runtime.Skia {
 		 */
 		private static virtualizedMutationQueue: (() => void)[] = [];
 		private static virtualizedRafId: number = 0;
+		private static virtualizedGeneration = 0;
+		private static virtualizedContainers = new Map<number, { generation: number; count: number }>();
+		private static virtualizedItems = new Map<number, {
+			container: number; generation: number; label?: string; disabled?: boolean; selected?: boolean;
+			geometry?: { x: number; y: number; width: number; height: number };
+		}>();
+
+		public static isUnmeasuredVirtualizedItem(handle: number, width: number, height: number): boolean {
+			return SemanticElements.virtualizedItems.has(handle) && !(width > 0 && height > 0);
+		}
+
+		public static updateVirtualizedItemLabel(handle: number, label: string): void {
+			const pending = SemanticElements.virtualizedItems.get(handle);
+			if (pending) {
+				pending.label = label;
+			}
+		}
+
+		public static updateVirtualizedItemGeometry(handle: number, width: number, height: number, x: number, y: number): void {
+			const geometry = SemanticElements.virtualizedItems.get(handle)?.geometry;
+			if (geometry) {
+				geometry.x = x;
+				geometry.y = y;
+				geometry.width = width;
+				geometry.height = height;
+			}
+		}
 
 		/**
 		 * Schedules a virtualized mutation to be flushed in the next animation frame.
@@ -1460,7 +1495,9 @@ namespace Uno.UI.Runtime.Skia {
 			role: string,
 			label: string,
 			multiselectable: boolean
-		): void {
+		): number {
+			const registration = { generation: ++SemanticElements.virtualizedGeneration, count: 0 };
+			SemanticElements.virtualizedContainers.set(containerHandle, registration);
 			// If an element for this container already exists (created by CreateListBoxElement),
 			// just update its attributes instead of creating a duplicate.
 			const existing = document.getElementById(`uno-semantics-${containerHandle}`);
@@ -1470,13 +1507,16 @@ namespace Uno.UI.Runtime.Skia {
 				}
 				if (multiselectable) {
 					existing.setAttribute('aria-multiselectable', 'true');
+				} else {
+					existing.removeAttribute('aria-multiselectable');
 				}
-				return;
+				return registration.generation;
 			}
 
 			const root = SemanticElements.getSemanticsRoot();
 			if (!root) {
-				return;
+				SemanticElements.virtualizedContainers.delete(containerHandle);
+				return 0;
 			}
 
 			const element = document.createElement('div');
@@ -1495,6 +1535,29 @@ namespace Uno.UI.Runtime.Skia {
 			}
 
 			root.appendChild(element);
+			return registration.generation;
+		}
+
+		private static placeVirtualizedItem(container: HTMLElement, element: HTMLElement, index: number): void {
+			let next: Element | null = null;
+			for (const sibling of container.children) {
+				if (sibling !== element && Number(sibling.getAttribute('aria-posinset')) > index + 1) {
+					next = sibling;
+					break;
+				}
+			}
+			let currentNext = element.nextElementSibling;
+			while (currentNext && !currentNext.hasAttribute('aria-posinset')) {
+				currentNext = currentNext.nextElementSibling;
+			}
+			if (element.parentElement === container && currentNext === next) {
+				return;
+			}
+			const focused = document.activeElement;
+			container.insertBefore(element, next);
+			if (focused instanceof HTMLElement && element.contains(focused)) {
+				focused.focus({ preventScroll: true });
+			}
 		}
 
 		/**
@@ -1511,36 +1574,68 @@ namespace Uno.UI.Runtime.Skia {
 			width: number,
 			height: number,
 			role: string,
-			label: string
+			label: string,
+			generation: number,
+			disabled: boolean = false,
+			selected: boolean = false
 		): void {
+			const registration = SemanticElements.virtualizedContainers.get(containerHandle);
+			if (!registration || registration.generation !== generation) {
+				return;
+			}
+			registration.count = totalCount;
+			const itemRegistration = { container: containerHandle, generation, label, disabled, selected, geometry: { x, y, width, height } };
+			SemanticElements.virtualizedItems.set(itemHandle, itemRegistration);
 			SemanticElements.scheduleVirtualizedMutation(() => {
+				if (SemanticElements.virtualizedContainers.get(containerHandle) !== registration ||
+					SemanticElements.virtualizedItems.get(itemHandle) !== itemRegistration) {
+					return;
+				}
 				const container = document.getElementById(`uno-semantics-${containerHandle}`);
 				if (!container) {
 					return;
 				}
+				label = itemRegistration.label;
+				disabled = itemRegistration.disabled;
+				selected = itemRegistration.selected;
+				({ x, y, width, height } = itemRegistration.geometry);
 
 				// If an element for this item already exists (created by OnChildAdded→CreateListItemElement),
 				// just update it instead of creating a duplicate.
 				const existingItem = document.getElementById(`uno-semantics-${itemHandle}`);
 				if (existingItem) {
 					existingItem.setAttribute('aria-posinset', String(index + 1));
-					existingItem.setAttribute('aria-setsize', String(totalCount));
+					existingItem.setAttribute('aria-setsize', String(registration.count));
+					existingItem.setAttribute('role', role);
+					existingItem.setAttribute('aria-disabled', String(disabled));
+					existingItem.setAttribute('aria-selected', String(selected));
+					if ('disabled' in existingItem) {
+						(existingItem as HTMLButtonElement).disabled = disabled;
+					}
 					if (label) {
 						existingItem.setAttribute('aria-label', label);
+					} else {
+						existingItem.removeAttribute('aria-label');
 					}
-					// Ensure item is inside the correct container
-					if (existingItem.parentElement !== container) {
-						container.appendChild(existingItem);
-					}
+					existingItem.style.left = `${x}px`;
+					existingItem.style.top = `${y}px`;
+					existingItem.style.width = `${width}px`;
+					existingItem.style.height = `${height}px`;
+					existingItem.hidden = SemanticElements.isUnmeasuredVirtualizedItem(itemHandle, width, height);
+					SemanticElements.placeVirtualizedItem(container, existingItem, index);
 					return;
 				}
 
 				const element = document.createElement('div');
 				SemanticElements.applyCommonStyles(element, x, y, width, height, itemHandle);
+				// Allocated containers can precede template layout; they are not accessible rows yet.
+				element.hidden = SemanticElements.isUnmeasuredVirtualizedItem(itemHandle, width, height);
 				element.setAttribute('role', role);
+				element.setAttribute('aria-disabled', String(disabled));
+				element.setAttribute('aria-selected', String(selected));
 				// aria-posinset is 1-based, index is 0-based
 				element.setAttribute('aria-posinset', String(index + 1));
-				element.setAttribute('aria-setsize', String(totalCount));
+				element.setAttribute('aria-setsize', String(registration.count));
 				element.tabIndex = -1;
 				element.style.pointerEvents = 'none';
 
@@ -1551,12 +1646,15 @@ namespace Uno.UI.Runtime.Skia {
 				const callbacks = SemanticElements.getCallbacks();
 				element.addEventListener('click', (e) => {
 					e.preventDefault();
-					if (callbacks.onSelection) {
+					const owner = SemanticElements.virtualizedItems.get(itemHandle);
+					if (owner && SemanticElements.virtualizedContainers.get(owner.container)?.generation === owner.generation &&
+						document.getElementById(element.id) === element &&
+						element.getAttribute('aria-disabled') !== 'true' && callbacks.onSelection) {
 						callbacks.onSelection(itemHandle);
 					}
 				});
 
-				container.appendChild(element);
+				SemanticElements.placeVirtualizedItem(container, element, index);
 			});
 		}
 
@@ -1564,24 +1662,44 @@ namespace Uno.UI.Runtime.Skia {
 		 * Removes a semantic element for an unrealized virtualized item.
 		 * Batched via requestAnimationFrame.
 		 */
-		public static removeVirtualizedItem(itemHandle: number): void {
+		public static removeVirtualizedItem(itemHandle: number, containerHandle: number, generation: number): void {
+			const registration = SemanticElements.virtualizedContainers.get(containerHandle);
+			if (!registration || registration.generation !== generation) {
+				return;
+			}
+			const owner = SemanticElements.virtualizedItems.get(itemHandle);
+			if (owner && (owner.container !== containerHandle || owner.generation !== generation)) {
+				return;
+			}
+			const removal = { container: containerHandle, generation };
+			SemanticElements.virtualizedItems.set(itemHandle, removal);
 			SemanticElements.scheduleVirtualizedMutation(() => {
+				if (SemanticElements.virtualizedContainers.get(containerHandle) !== registration ||
+					SemanticElements.virtualizedItems.get(itemHandle) !== removal) {
+					return;
+				}
 				const element = document.getElementById(`uno-semantics-${itemHandle}`);
 				if (element && element.parentElement) {
 					element.parentElement.removeChild(element);
 				}
+				SemanticElements.virtualizedItems.delete(itemHandle);
 			});
 		}
 
 		/**
 		 * Updates the total item count on all realized items in a container.
 		 */
-		public static updateVirtualizedItemCount(containerHandle: number, totalCount: number): void {
+		public static updateVirtualizedItemCount(containerHandle: number, totalCount: number, generation: number): void {
+			const registration = SemanticElements.virtualizedContainers.get(containerHandle);
+			if (!registration || registration.generation !== generation) {
+				return;
+			}
+			registration.count = totalCount;
 			const container = document.getElementById(`uno-semantics-${containerHandle}`);
 			if (!container) {
 				return;
 			}
-			const items = container.querySelectorAll<HTMLElement>('[aria-posinset]');
+			const items = container.querySelectorAll<HTMLElement>(':scope > [aria-posinset]');
 			items.forEach((el) => {
 				el.setAttribute('aria-setsize', String(totalCount));
 			});
@@ -1590,7 +1708,16 @@ namespace Uno.UI.Runtime.Skia {
 		/**
 		 * Unregisters a virtualized container and removes all its semantic elements.
 		 */
-		public static unregisterVirtualizedContainer(containerHandle: number): void {
+		public static unregisterVirtualizedContainer(containerHandle: number, generation: number): void {
+			if (SemanticElements.virtualizedContainers.get(containerHandle)?.generation !== generation) {
+				return;
+			}
+			SemanticElements.virtualizedContainers.delete(containerHandle);
+			for (const [handle, registration] of SemanticElements.virtualizedItems) {
+				if (registration.container === containerHandle && registration.generation === generation) {
+					SemanticElements.virtualizedItems.delete(handle);
+				}
+			}
 			const element = document.getElementById(`uno-semantics-${containerHandle}`);
 			if (element && element.parentElement) {
 				element.parentElement.removeChild(element);

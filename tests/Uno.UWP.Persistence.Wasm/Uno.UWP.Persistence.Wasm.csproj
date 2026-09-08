@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk.WebAssembly">
+	<PropertyGroup>
+		<TargetFramework>$(NetCurrent)</TargetFramework>
+		<OutputType>Exe</OutputType>
+		<Nullable>enable</Nullable>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+		<InvariantGlobalization>true</InvariantGlobalization>
+		<PublishTrimmed>false</PublishTrimmed>
+		<WasmEnableWebcil>false</WasmEnableWebcil>
+		<WasmBuildNative>true</WasmBuildNative>
+		<EmccExtraLDFlags>-lidbfs.js</EmccExtraLDFlags>
+		<UnoSourceRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..'))</UnoSourceRoot>
+		<FixtureInteropScript>$(UnoSourceRoot)\artifacts\persistence-fixture\Uno.Interop.js</FixtureInteropScript>
+	</PropertyGroup>
+	<ItemGroup>
+		<EmccExportedRuntimeMethod Include="FS;IDBFS" />
+		<Reference Include="Uno" HintPath="$(UnoSourceRoot)\src\Uno.UWP\bin\Uno.Wasm\$(Configuration)\$(TargetFramework)\Uno.dll" />
+		<Reference Include="Uno.Foundation" HintPath="$(UnoSourceRoot)\src\Uno.Foundation\bin\Uno.Foundation.Wasm\$(Configuration)\$(TargetFramework)\Uno.Foundation.dll" />
+		<Reference Include="Uno.Foundation.Runtime.WebAssembly" HintPath="$(UnoSourceRoot)\src\Uno.Foundation.Runtime.WebAssembly\bin\$(Configuration)\$(TargetFramework)\Uno.Foundation.Runtime.WebAssembly.dll" />
+		<Reference Include="Uno.Foundation.Logging" HintPath="$(UnoSourceRoot)\src\Uno.Foundation.Logging\bin\Uno.Foundation.Logging\$(Configuration)\$(NetPrevious)\Uno.Foundation.Logging.dll" />
+		<Reference Include="Uno.UI.Dispatching" HintPath="$(UnoSourceRoot)\src\Uno.UI.Dispatching\bin\Uno.UI.Dispatching.Wasm\$(Configuration)\$(TargetFramework)\Uno.UI.Dispatching.dll" />
+		<PackageReference Include="Uno.Diagnostics.Eventing" Version="2.0.1" />
+		<Content Include="index.html" CopyToOutputDirectory="PreserveNewest" TargetPath="wwwroot\index.html" />
+		<Content Include="main.js" CopyToOutputDirectory="PreserveNewest" TargetPath="wwwroot\main.js" />
+		<Content Include="$(UnoSourceRoot)\src\Uno.UWP\bin\Uno.Wasm\$(Configuration)\$(TargetFramework)\javascript\Uno.Wasm.js" CopyToOutputDirectory="PreserveNewest" TargetPath="wwwroot\Uno.Wasm.js" />
+		<Content Include="$(FixtureInteropScript)" CopyToOutputDirectory="PreserveNewest" TargetPath="wwwroot\Uno.Interop.js" />
+	</ItemGroup>
+</Project>

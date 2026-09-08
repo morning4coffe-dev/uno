@@ -1,11 +1,6 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Runtime.InteropServices;
-using System.Runtime.InteropServices.JavaScript;
-using Uno.Foundation;
-using Uno.Foundation.Interop;
+﻿#nullable enable
+
+using System;
 using Uno.Extensions;
 using System.Threading.Tasks;
 using Uno.Foundation.Logging;
@@ -15,7 +10,7 @@ namespace Windows.Storage
 {
 	partial class StorageFolder
 	{
-		private static TaskCompletionSource<bool> _storageInitialized = new TaskCompletionSource<bool>();
+		private static readonly TaskCompletionSource<bool> _storageInitialized = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
 		internal async Task MakePersistentAsync()
 			=> await MakePersistentAsync(this);
@@ -38,15 +33,18 @@ namespace Windows.Storage
 		internal static async Task MakePersistentAsync(params StorageFolder[] folders)
 			=> await NativeMethods.MakePersistentAsync(folders.SelectToArray(f => f.Path));
 
-		[JSExport]
-		internal static void DispatchStorageInitialized()
+		internal static async Task InitializeApplicationDataAsync(params StorageFolder[] folders)
 		{
-			if (typeof(StorageFolder).Log().IsEnabled(Uno.Foundation.Logging.LogLevel.Debug))
+			try
 			{
-				typeof(StorageFolder).Log().Debug("Dispatch emscripten storage initialized");
+				await MakePersistentAsync(folders);
+				_storageInitialized.TrySetResult(true);
 			}
-
-			_storageInitialized.TrySetResult(true);
+			catch (Exception error)
+			{
+				_storageInitialized.TrySetException(error);
+				throw;
+			}
 		}
 
 	}

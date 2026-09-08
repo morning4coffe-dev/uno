@@ -147,7 +147,15 @@ namespace Microsoft.UI.Xaml
 			// identity-based checks (HasKeyboardFocusImpl, SetFocusHelper) work correctly.
 			if (Visibility != Visibility.Collapsed && isPopupOpen)
 			{
-				return _uiElementAutomationPeer ??= OnCreateAutomationPeerInternal();
+				if (_uiElementAutomationPeer is null)
+				{
+					_uiElementAutomationPeer = OnCreateAutomationPeerInternal();
+#if __SKIA__
+					// Initialize after construction and caching: peer getters may re-enter this method.
+					_uiElementAutomationPeer?.RaiseAutomaticPropertyChanges(firePropertyChangedEvents: false);
+#endif
+				}
+				return _uiElementAutomationPeer;
 			}
 			else
 			{

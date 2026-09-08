@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Specialized;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
@@ -22,6 +23,8 @@ using Microsoft.UI.Xaml.Input;
 using Uno.Extensions;
 using Uno.Foundation.Logging;
 using Uno.Helpers;
+using Uno.UI.Dispatching;
+using Windows.Foundation.Collections;
 
 namespace Uno.UI.Runtime.Skia;
 
@@ -50,9 +53,13 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 
 	protected override void DisposeCore()
 	{
-		// WebAssembly runs in a single browser tab; disposal is not part of the
-		// per-window lifecycle exercised by the Skia-Desktop router. No-op so the
-		// base-class lifecycle contract holds.
+		_initialGeometrySubscription?.Dispose();
+		_initialGeometrySubscription = null;
+		foreach (var registration in _modalRegistrations.Values.ToArray())
+		{
+			registration.Dispose();
+		}
+		_modalRegistrations.Clear();
 	}
 
 	private bool _isAccessibilityEnabled;
@@ -345,7 +352,8 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 
 	protected override void OnChildAdded(UIElement parent, UIElement child, int? index)
 	{
-		if (!_isAccessibilityEnabled || _isCreatingAOM)
+		// Detached templates join the semantic tree when their subtree is attached, not while it is built.
+		if (!_isAccessibilityEnabled || _isCreatingAOM || !IsAttachedToSemanticRoot(child))
 		{
 			return;
 		}
@@ -371,8 +379,6 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 				this.Log().Trace($"[A11y] OnChildAdded: parent={parent.GetType().Name} handle={parent.Visual.Handle} child={child.GetType().Name} handle={child.Visual.Handle} index={index?.ToString(CultureInfo.InvariantCulture) ?? "append"}");
 			}
 
-			// Detect virtualized containers for accessibility tracking
-			TryRegisterVirtualizedContainer(child);
 			// Detect ContentDialog for focus trapping
 			TryRegisterModalDialog(child);
 			// Detect ComboBox dropdowns so their options form a proper role="listbox"
@@ -391,7 +397,15 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 				// the _semanticParentMap (which causes removeChild to throw when
 				// the recorded parent doesn't match the actual DOM parent).
 				var childHandle = child.Visual.Handle;
-				if (!_semanticParentMap.ContainsKey(childHandle))
+				if (_semanticParentMap.TryGetValue(childHandle, out var previousParent))
+				{
+					if (previousParent != semanticParent &&
+						NativeMethods.ReparentSemanticElement(childHandle, semanticParent, index))
+					{
+						_semanticParentMap[childHandle] = semanticParent;
+					}
+				}
+				else if (!IsRealizedVirtualizedItem(childHandle))
 				{
 					if (AddSemanticElement(semanticParent, child, index))
 					{
@@ -418,6 +432,9 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 					}
 				}
 			}
+
+			// Register only after the semantic container exists, including on the dynamic path.
+			TryRegisterVirtualizedContainer(child);
 
 			// Don't recurse into virtualized containers — their items are managed
 			// by VirtualizedSemanticRegion via ContainerContentChanging/ElementPrepared.
@@ -452,6 +469,9 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 			if (--_onChildAddedDepth == 0)
 			{
 				DrainPendingLabelledBy();
+				QueueSemanticSubtreeGeometry(child);
+				QueueVirtualizedAncestorNameRefresh(parent);
+				QueueModalRefresh(parent);
 			}
 		}
 	}
@@ -472,6 +492,7 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 
 			TryUnsubscribeScrollSource(child);
 			TryUnregisterVirtualizedContainer(child);
+			TryUnregisterModalDialog(child);
 			TryUnregisterComboBox(child);
 			TryUnrealizeComboBoxItem(child);
 
@@ -539,29 +560,101 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 				false);
 			_virtualizedRegions.Add(region);
 
-			repeater.ElementPrepared += (s, e) =>
-				EmitRealizedItem(region, repeater.Visual.Handle, e.Element, e.Index, repeater.ItemsSourceView?.Count ?? 0, "option");
-
-			repeater.ElementClearing += (s, e) =>
+			void OnPrepared(ItemsRepeater sender, ItemsRepeaterElementPreparedEventArgs args)
 			{
-				var info = ItemsRepeater.GetVirtualizationInfo(e.Element);
-				if (info is not null)
-				{
-					region.OnItemUnrealized(e.Element.Visual.Handle, info.Index);
-				}
-			};
-
-			// Backfill items realized before this container was registered (the AOM-build / Enable-
-			// Accessibility-after-load flow); ElementPrepared only fires for FUTURE realizations.
-			var totalCount = repeater.ItemsSourceView?.Count ?? 0;
-			foreach (var itemElement in repeater.Children)
+				EmitRealizedItem(region, containerHandle, args.Element, args.Index, repeater.ItemsSourceView?.Count ?? 0, "option");
+				RequestRefresh();
+			}
+			void OnClearing(ItemsRepeater sender, ItemsRepeaterElementClearingEventArgs args)
 			{
-				var info = ItemsRepeater.GetVirtualizationInfo(itemElement);
-				if (info is not null && info.IsRealized)
+				if (region.TryGetIndex(args.Element.Visual.Handle, out var index))
 				{
-					EmitRealizedItem(region, repeater.Visual.Handle, itemElement, info.Index, totalCount, "option");
+					region.OnItemUnrealized(args.Element.Visual.Handle, index);
 				}
 			}
+			void OnIndexChanged(ItemsRepeater sender, ItemsRepeaterElementIndexChangedEventArgs args) => RequestRefresh();
+			void OnCollectionChanged(object? sender, NotifyCollectionChangedEventArgs args) => RequestRefresh();
+			void Refresh()
+			{
+				if (region.IsDisposed)
+				{
+					return;
+				}
+				var totalCount = repeater.ItemsSourceView?.Count ?? 0;
+				region.UpdateItemCount(totalCount);
+				var realized = new HashSet<IntPtr>();
+				foreach (var itemElement in repeater.Children)
+				{
+					var info = ItemsRepeater.GetVirtualizationInfo(itemElement);
+					if (info is { IsRealized: true })
+					{
+						realized.Add(itemElement.Visual.Handle);
+						EmitRealizedItem(region, containerHandle, itemElement, info.Index, totalCount, "option");
+					}
+				}
+				region.RemoveExcept(realized);
+			}
+			bool pending = false;
+			bool needsLayoutRefresh = false;
+			void RequestRefresh()
+			{
+				if (region.IsDisposed)
+				{
+					return;
+				}
+				needsLayoutRefresh = true;
+				if (!pending)
+				{
+					pending = true;
+					NativeDispatcher.Main.Enqueue(() => { pending = false; Refresh(); });
+				}
+			}
+			void OnLayoutUpdated(object? sender, object args)
+			{
+				if (needsLayoutRefresh)
+				{
+					needsLayoutRefresh = false;
+					Refresh();
+				}
+			}
+			ItemsSourceView? sourceView = null;
+			void ObserveSource()
+			{
+				if (region.IsDisposed)
+				{
+					return;
+				}
+				if (sourceView is not null)
+				{
+					sourceView.CollectionChanged -= OnCollectionChanged;
+				}
+				sourceView = repeater.ItemsSourceView;
+				if (sourceView is not null)
+				{
+					sourceView.CollectionChanged += OnCollectionChanged;
+				}
+				RequestRefresh();
+			}
+			repeater.ElementPrepared += OnPrepared;
+			repeater.ElementClearing += OnClearing;
+			repeater.ElementIndexChanged += OnIndexChanged;
+			repeater.LayoutUpdated += OnLayoutUpdated;
+			var sourceToken = repeater.RegisterPropertyChangedCallback(ItemsRepeater.ItemsSourceProperty, (_, _) => ObserveSource());
+			region.OwnSubscription(() =>
+			{
+				repeater.ElementPrepared -= OnPrepared;
+				repeater.ElementClearing -= OnClearing;
+				repeater.ElementIndexChanged -= OnIndexChanged;
+				repeater.LayoutUpdated -= OnLayoutUpdated;
+				repeater.UnregisterPropertyChangedCallback(ItemsRepeater.ItemsSourceProperty, sourceToken);
+				if (sourceView is not null)
+				{
+					sourceView.CollectionChanged -= OnCollectionChanged;
+					sourceView = null;
+				}
+			});
+			ObserveSource();
+			Refresh();
 		}
 		else if (element is ListViewBase listView)
 		{
@@ -576,31 +669,80 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 
 			var itemRole = isGrid ? "row" : "option";
 
-			listView.ContainerContentChanging += (s, e) =>
+			void OnContentChanging(ListViewBase sender, ContainerContentChangingEventArgs args)
 			{
-				if (!e.InRecycleQueue)
+				if (args.ItemContainer is { } itemElement)
 				{
-					if (e.ItemContainer is { } itemElement)
+					if (!args.InRecycleQueue)
 					{
-						EmitRealizedItem(region, listView.Visual.Handle, itemElement, e.ItemIndex, listView.Items?.Count ?? 0, itemRole);
+						EmitRealizedItem(region, containerHandle, itemElement, args.ItemIndex, listView.Items.Count, itemRole);
+						RequestRefresh();
+					}
+					else if (args.ItemIndex >= 0)
+					{
+						region.OnItemUnrealized(itemElement.Visual.Handle, args.ItemIndex);
+					}
+					else if (region.TryGetIndex(itemElement.Visual.Handle, out var index))
+					{
+						region.OnItemUnrealized(itemElement.Visual.Handle, index);
 					}
 				}
-				else if (e.ItemContainer is { } itemElement)
-				{
-					region.OnItemUnrealized(itemElement.Visual.Handle, e.ItemIndex);
-				}
-			};
-
-			// Backfill already-materialized containers (the Enable-Accessibility-after-load flow).
-			var totalCount = listView.Items?.Count ?? 0;
-			foreach (var container in listView.MaterializedContainers.OfType<UIElement>())
+			}
+			void Refresh()
 			{
-				var index = listView.IndexFromContainer(container);
-				if (index >= 0)
+				if (region.IsDisposed)
 				{
-					EmitRealizedItem(region, listView.Visual.Handle, container, index, totalCount, itemRole);
+					return;
+				}
+				var totalCount = listView.Items.Count;
+				region.UpdateItemCount(totalCount);
+				var realized = new HashSet<IntPtr>();
+				foreach (var container in listView.MaterializedContainers.OfType<UIElement>())
+				{
+					var index = listView.IndexFromContainer(container);
+					if (index >= 0)
+					{
+						realized.Add(container.Visual.Handle);
+						EmitRealizedItem(region, containerHandle, container, index, totalCount, itemRole);
+					}
+				}
+				region.RemoveExcept(realized);
+			}
+			bool pending = false;
+			bool needsLayoutRefresh = false;
+			void RequestRefresh()
+			{
+				if (region.IsDisposed)
+				{
+					return;
+				}
+				needsLayoutRefresh = true;
+				if (!pending)
+				{
+					pending = true;
+					NativeDispatcher.Main.Enqueue(() => { pending = false; Refresh(); });
 				}
 			}
+			void OnLayoutUpdated(object? sender, object args)
+			{
+				if (needsLayoutRefresh)
+				{
+					needsLayoutRefresh = false;
+					Refresh();
+				}
+			}
+			void OnItemsChanged(IObservableVector<object> sender, IVectorChangedEventArgs args) => RequestRefresh();
+			listView.ContainerContentChanging += OnContentChanging;
+			listView.Items.VectorChanged += OnItemsChanged;
+			listView.LayoutUpdated += OnLayoutUpdated;
+			region.OwnSubscription(() =>
+			{
+				listView.ContainerContentChanging -= OnContentChanging;
+				listView.Items.VectorChanged -= OnItemsChanged;
+				listView.LayoutUpdated -= OnLayoutUpdated;
+			});
+			RequestRefresh();
+			Refresh();
 		}
 	}
 
@@ -616,20 +758,27 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 		// NavigationViewItems. Emitting those as role="option" exposes decorative clutter to AT
 		// (A11y Inspector WARN). Skip anything IsSemanticElement prunes (Raw short-circuit, structural,
 		// absorbed TextBlock), matching the membership rule the rest of the AOM walk already enforces.
-		if (!IsSemanticElement(itemElement))
+		if (region.IsDisposed || !IsSemanticElement(itemElement))
 		{
 			return;
 		}
 
-		var label = itemElement.GetOrCreateAutomationPeer()?.GetName() ?? string.Empty;
+		var peer = itemElement.GetOrCreateAutomationPeer();
+		var label = peer?.GetName() ?? string.Empty;
 		var offset = GetOffsetRelativeToSemanticParent(itemElement, containerHandle);
+		var selected = itemElement switch
+		{
+			SelectorItem selectorItem => selectorItem.IsSelected,
+			NavigationViewItem navigationItem => navigationItem.IsSelected,
+			_ => false
+		};
 		region.OnItemRealized(
 			itemElement.Visual.Handle,
 			index,
 			totalCount,
 			offset.X, offset.Y,
 			itemElement.Visual.Size.X, itemElement.Visual.Size.Y,
-			role, label);
+			role, label, peer?.IsEnabled() == false, selected);
 	}
 
 	private void TryUnregisterVirtualizedContainer(UIElement element)
@@ -646,67 +795,6 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 					break;
 				}
 			}
-		}
-	}
-
-	private void TryRegisterModalDialog(UIElement element)
-	{
-		if (element is ContentDialog dialog)
-		{
-			dialog.Opened += (s, e) =>
-			{
-				if (!IsAccessibilityEnabled)
-				{
-					return;
-				}
-
-				// Save trigger element (currently focused element before dialog opens)
-				var triggerHandle = _focusSynchronizer?.CurrentFocusedHandle ?? IntPtr.Zero;
-
-				// Enumerate focusable children within the dialog
-				var focusableChildren = new List<IntPtr>();
-				EnumerateFocusableChildren(dialog, focusableChildren);
-
-				// Create and activate the modal focus scope
-				var scope = new ModalFocusScope(dialog.Visual.Handle, triggerHandle, focusableChildren);
-				scope.Activate(ActiveModalScope);
-				ActiveModalScope = scope;
-
-				// Notify LiveRegionManager so it suppresses background live region updates
-				if (_liveRegionManager is { } lrm)
-				{
-					lrm.ActiveModalHandle = dialog.Visual.Handle;
-				}
-
-				// Announce the dialog title for screen readers
-				var dialogPeer = dialog.GetOrCreateAutomationPeer();
-				var dialogTitle = dialogPeer?.GetName();
-				if (!string.IsNullOrEmpty(dialogTitle))
-				{
-					NativeMethods.AnnounceAssertive(dialogTitle);
-				}
-			};
-
-			dialog.Closed += (s, e) =>
-			{
-				if (!IsAccessibilityEnabled || ActiveModalScope is null)
-				{
-					return;
-				}
-
-				if (ActiveModalScope.ModalHandle == dialog.Visual.Handle)
-				{
-					var parentScope = ActiveModalScope.ParentScope;
-					ActiveModalScope.Deactivate();
-					ActiveModalScope = parentScope;
-
-					// Update LiveRegionManager: restore parent modal or clear
-					if (_liveRegionManager is { } lrm)
-					{
-						lrm.ActiveModalHandle = parentScope?.ModalHandle ?? IntPtr.Zero;
-					}
-				}
-			};
 		}
 	}
 
@@ -753,27 +841,12 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 					return;
 				}
 
-				if (_semanticParentMap.TryGetValue(handle, out var semanticParentHandle)
+				if (TryGetSemanticParentHandle(handle, out var semanticParentHandle)
 					&& containerVisual.Owner?.Target is UIElement element)
 				{
-					// Use the full element-to-semantic-parent transform so that
-					// RenderTransform, Scale, etc. are reflected in the position.
-					var semanticParentElement = FindUIElementByHandle(element, semanticParentHandle);
-					var localRect = new Windows.Foundation.Rect(0, 0, visual.Size.X, visual.Size.Y);
-					if (semanticParentElement is not null)
-					{
-						var transform = UIElement.GetTransform(from: element, to: semanticParentElement);
-						var transformedRect = transform.Transform(localRect);
-						NativeMethods.UpdateSemanticElementPositioning(handle, (float)transformedRect.Width, (float)transformedRect.Height, (float)transformedRect.X, (float)transformedRect.Y);
-					}
-					else
-					{
-						var transform = UIElement.GetTransform(from: element, to: null);
-						var transformedRect = transform.Transform(localRect);
-						NativeMethods.UpdateSemanticElementPositioning(handle, (float)transformedRect.Width, (float)transformedRect.Height, (float)transformedRect.X, (float)transformedRect.Y);
-					}
+					UpdateSemanticElementGeometry(handle, element, semanticParentHandle);
 				}
-				else
+				else if (HasSemanticElement(handle))
 				{
 					// Root element or element not in semantic map — use full transform to root
 					if (containerVisual.Owner?.Target is UIElement rootElement)
@@ -788,6 +861,10 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 						var totalOffset = visual.GetTotalOffset();
 						NativeMethods.UpdateSemanticElementPositioning(handle, visual.Size.X, visual.Size.Y, totalOffset.X, totalOffset.Y);
 					}
+				}
+				else if (!_isCreatingAOM && containerVisual.Owner?.Target is UIElement prunedElement)
+				{
+					UpdateNearestSemanticDescendantsGeometry(prunedElement);
 				}
 			}
 		}
@@ -926,6 +1003,7 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 		{
 			@this._isCreatingAOM = false;
 		}
+		@this.InitializeSemanticGeometry(rootElement);
 		Control.OnIsFocusableChangedCallback = @this.UpdateIsFocusable;
 
 		// Initialize subsystems
@@ -1361,6 +1439,10 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 		{
 			return false;
 		}
+		if (element is ContentDialog)
+		{
+			return true;
+		}
 
 		// ComboBox dropdown items are surfaced as role="option" under a dedicated role="listbox"
 		// region (see TryRealizeComboBoxItem). Emitting them through the generic path would orphan
@@ -1494,16 +1576,16 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 		//    listbox region (TryRealizeComboBoxItem).
 		//  - under a ComboBox (but no intervening ComboBoxItem): the head faceplate's selected value is
 		//    conveyed by the combobox role/value (aria-activedescendant / the head's name).
-		// An ImplicitTextBlock is the auto-generated text of a presenting control's string content
-		// (a ComboBoxItem option, the combobox faceplate, a Button caption, …), so its text is always
-		// conveyed by that control — never standalone body text. The visual-parent walk below misses
-		// popup-hosted content (managed GetParent does not traverse the popup host), so gate on type.
-		if (element is ImplicitTextBlock)
+		// Implicit captions are normally absorbed by their controls. Dialog titles and bodies
+		// must also remain readable as content, independently of the modal's accessible name.
+		if (element is ImplicitTextBlock implicitText)
 		{
-			return false;
+			return AutomationProperties.GetAccessibilityView(implicitText.ContentOwner) != AccessibilityView.Raw
+				&& !HasTextOwnerAncestor(element)
+				&& FindAncestorDialog(element) is not null;
 		}
 
-		if (HasComboBoxOrComboBoxItemAncestor(element))
+		if (HasTextOwnerAncestor(element))
 		{
 			return false;
 		}
@@ -1512,17 +1594,19 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 	}
 
 	/// <summary>
-	/// True when the visual ancestor chain of <paramref name="element"/> includes a ComboBoxItem
-	/// (dropdown option) or a ComboBox (head faceplate). Such text is already conveyed by the
-	/// listbox option / combobox role, so a plain descendant TextBlock must not be re-emitted as a
-	/// standalone &lt;p&gt;.
+	/// Widget captions and editor display blocks are represented by their owner's name or value,
+	/// not by independently focusable body-text nodes.
 	/// </summary>
-	private static bool HasComboBoxOrComboBoxItemAncestor(UIElement element)
+	private static bool HasTextOwnerAncestor(UIElement element)
 	{
 		var node = element.GetParent() as UIElement;
 		while (node is not null)
 		{
-			if (node is ComboBoxItem or ComboBox)
+			if (node is ContentDialog)
+			{
+				return false;
+			}
+			if (node is ComboBoxItem or ComboBox or TextBox or PasswordBox or ButtonBase or SelectorItem or NavigationViewItem)
 			{
 				return true;
 			}
@@ -1583,7 +1667,7 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 		var handle = visualParent.Visual.Handle;
 
 		// If the visual parent is itself in the semantic tree, use it
-		if (_semanticParentMap.ContainsKey(handle))
+		if (HasSemanticElement(handle))
 		{
 			return handle;
 		}
@@ -1594,7 +1678,7 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 		while (parent is not null)
 		{
 			var parentHandle = parent.Visual.Handle;
-			if (_semanticParentMap.ContainsKey(parentHandle) || parentHandle == _rootElementHandle)
+			if (HasSemanticElement(parentHandle))
 			{
 				return parentHandle;
 			}
@@ -1666,6 +1750,7 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 		// this a NavigationView/list already realized at Enable-Accessibility time would never emit its
 		// items — ElementPrepared only fires for future realizations (T057/FR-031).
 		TryRegisterVirtualizedContainer(child);
+		TryRegisterModalDialog(child);
 
 		// Don't recurse into virtualized containers — their items are managed
 		// by VirtualizedSemanticRegion via ContainerContentChanging/ElementPrepared.
@@ -1757,6 +1842,14 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 		var resolvedName = automationPeer is not null
 			? AriaMapper.ResolveLabel(automationPeer)
 			: AutomationProperties.GetName(child);
+		if (child is ContentDialog contentDialog)
+		{
+			resolvedName = ResolveDialogName(contentDialog);
+		}
+		else if (child is ContentDialogPopupPanel or Popup { Child: ContentDialog })
+		{
+			resolvedName = null;
+		}
 		var hasAccessibleName = !string.IsNullOrEmpty(resolvedName);
 
 		// Fall back to generic semantic element for unsupported control types.
@@ -1765,6 +1858,14 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 			? AriaMapper.GetAriaRole(automationPeer.GetAutomationControlType())
 			: null)
 			?? AutomationProperties.FindHtmlRole(child);
+		if (child is ContentDialog)
+		{
+			role = "dialog";
+		}
+		else if (child is ContentDialogPopupPanel or Popup { Child: ContentDialog })
+		{
+			role = null;
+		}
 
 		// FR-013/FR-014: a ScrollViewer (control type Pane → "region") only earns role=region when it
 		// is actually scrollable AND named. A non-scrollable or unnamed ScrollViewer must NOT become an
@@ -1976,7 +2077,10 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 	private void OnAutomationNameChanged(UIElement element, string automationId)
 	{
 		Debug.Assert(IsAccessibilityEnabled);
+		ReconcileBodyTextMembership(element);
 		NativeMethods.UpdateAriaLabel(element.Visual.Handle, automationId);
+		RefreshVirtualizedAncestorName(element);
+		QueueModalLabelRefresh(element);
 	}
 
 	protected override void AnnounceOnPlatform(string text, bool assertive)
@@ -2093,6 +2197,7 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 				this.Log().Trace($"[A11y] PROP CHANGE: IsEnabled handle={element.Visual.Handle} element={element.GetType().Name} disabled={isDisabled}");
 			}
 			NativeMethods.UpdateDisabledState(element.Visual.Handle, isDisabled);
+			QueueModalRefresh(element);
 		}
 		else if (automationProperty == ExpandCollapsePatternIdentifiers.ExpandCollapseStateProperty &&
 			TryGetPeerOwner(peer, out element))

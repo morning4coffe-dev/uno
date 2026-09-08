@@ -24,6 +24,11 @@
 	</ItemGroup>
 
 	<ItemGroup>
+		<Compile Include="..\..\Uno.WinAppSDKSyncGenerator\ScopedApiValidation.cs" Link="ScopedApiValidation\ScopedApiValidation.cs" />
+		<Compile Include="..\..\Uno.WinAppSDKSyncGenerator\ScopedReferenceResolver.cs" Link="ScopedApiValidation\ScopedReferenceResolver.cs" />
+	</ItemGroup>
+
+	<ItemGroup>
 		<Compile Remove="Results\**\*.*" />
 		<None Include="Results\**\*.*" />
 	</ItemGroup>

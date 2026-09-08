@@ -262,7 +262,7 @@ using View = Microsoft.UI.Xaml.FrameworkElement;
 				new PropertyDefinition("ItemWidth", "double", "Double.NaN"),
 				new PropertyDefinition("Orientation", "Orientation", "Orientation.Vertical"),
 				new PropertyDefinition("MaximumRowsOrColumns", "int", "-1"),
-				new PropertyDefinition("CacheLength", "double", "4.0", condition: "__ANDROID__"),
+				new PropertyDefinition("CacheLength", "double", "4.0", condition: "__ANDROID__ || UNO_REFERENCE_API"),
 			}),
 			new ClassDefinition("VirtualizingPanelLayout", "true", "public", new[]
 			{

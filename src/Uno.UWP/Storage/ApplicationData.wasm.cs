@@ -14,7 +14,7 @@ partial class ApplicationData
 	{
 		try
 		{
-			await StorageFolder.MakePersistentAsync(
+			await StorageFolder.InitializeApplicationDataAsync(
 				LocalFolder,
 				RoamingFolder,
 				// TemporaryFolder.Path: No needs to persist it!

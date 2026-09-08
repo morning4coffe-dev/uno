@@ -2,7 +2,37 @@
 	export class BrowserKeyboardInputSource {
 		private static _exports: any;
 		private static _source: any;
-		
+		private static _accessibilityActivationKey: string | null = null;
+
+		public static consumeAccessibilityActivation(evt: KeyboardEvent): void {
+			BrowserKeyboardInputSource.clearAccessibilityActivation();
+			BrowserKeyboardInputSource._accessibilityActivationKey = evt.code || evt.key;
+			evt.preventDefault();
+			evt.stopImmediatePropagation();
+			// Activation moves focus and removes its target. Own the rest of this press before
+			// it reaches either a semantic control's handlers or the managed keyboard bridge.
+			document.addEventListener("keydown", BrowserKeyboardInputSource.suppressAccessibilityActivation, true);
+			document.addEventListener("keyup", BrowserKeyboardInputSource.suppressAccessibilityActivation, true);
+			window.addEventListener("blur", BrowserKeyboardInputSource.clearAccessibilityActivation);
+		}
+
+		private static suppressAccessibilityActivation(evt: KeyboardEvent): void {
+			if ((evt.code || evt.key) === BrowserKeyboardInputSource._accessibilityActivationKey) {
+				evt.preventDefault();
+				evt.stopImmediatePropagation();
+				if (evt.type === "keyup") {
+					BrowserKeyboardInputSource.clearAccessibilityActivation();
+				}
+			}
+		}
+
+		private static clearAccessibilityActivation(): void {
+			BrowserKeyboardInputSource._accessibilityActivationKey = null;
+			document.removeEventListener("keydown", BrowserKeyboardInputSource.suppressAccessibilityActivation, true);
+			document.removeEventListener("keyup", BrowserKeyboardInputSource.suppressAccessibilityActivation, true);
+			window.removeEventListener("blur", BrowserKeyboardInputSource.clearAccessibilityActivation);
+		}
+
 		public static initialize(inputSource: any): any {
 			if (BrowserKeyboardInputSource._exports == undefined) {
 				const browserExports = WebAssemblyWindowWrapper.getAssemblyExports();

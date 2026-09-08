@@ -130,6 +130,10 @@ namespace Uno.WinAppSDKSyncGenerator
 		protected List<string> MissingEnumMembers { get; set; }
 		protected ISymbol UIElementSymbol { get; private set; }
 		private static string MSBuildBasePath;
+		internal static bool IsScopedGeneration { get; set; }
+		internal static IReadOnlyList<PortableExecutableReference> ScopedReferences { get; set; } = Array.Empty<PortableExecutableReference>();
+		internal static IReadOnlyDictionary<string, List<PortableExecutableReference>> ScopedPlatformReferences { get; set; }
+			= new Dictionary<string, List<PortableExecutableReference>>();
 
 		private static readonly string[] _unoUINamespaces = new[]
 		{
@@ -494,6 +498,17 @@ namespace Uno.WinAppSDKSyncGenerator
 				default:
 					throw new InvalidOperationException($"Unknown assembly '{type.ContainingAssembly.Name}'.");
 			}
+		}
+
+		protected IEnumerable<(Compilation Compilation, INamedTypeSymbol Type)> GetScopedPlatformTypes(INamedTypeSymbol type)
+		{
+			var symbols = GetAllSymbols(type);
+			yield return (_androidCompilation, symbols.AndroidSymbol);
+			yield return (_iOSCompilation, symbols.IOSSymbol);
+			yield return (_tvOSCompilation, symbols.TvOSSymbol);
+			yield return (_wasmCompilation, symbols.WasmSymbol);
+			yield return (_skiaCompilation, symbols.SkiaSymbol);
+			yield return (_netstdReferenceCompilation, symbols.NetStdReferenceSymbol);
 		}
 
 		protected class PlatformSymbols<T> where T : ISymbol
@@ -2290,7 +2305,7 @@ namespace Uno.WinAppSDKSyncGenerator
 			string[] expectedRefs = ["Uno.Foundation", "Uno", "Uno.UI.Composition", "Uno.UI.Dispatching"];
 			foreach (var expectedRef in expectedRefs)
 			{
-				if (!externalCompilationReferences.Contains(expectedRef))
+				if (!IsScopedGeneration && !externalCompilationReferences.Contains(expectedRef))
 				{
 					// If you hit this, ensure projectFile was restored. If it wasn't and `obj/project.assets.json` is missing,
 					// the target IncludeTransitiveProjectReferences will not be run, and we can end up with missing assemblies.
@@ -2362,7 +2377,7 @@ namespace Uno.WinAppSDKSyncGenerator
 				.Where(p => p.MetadataReferences.None())
 				.ToArray();
 
-			if (metadataLessProjects.Length > 0)
+			if (metadataLessProjects.Length > 0 && !IsScopedGeneration)
 			{
 				// In this case, this may mean that Rolsyn failed to execute some msbuild task that loads the
 				// references in a UWA project (or NuGet 3.0+ with project.json, more specifically). For these
@@ -2384,6 +2399,25 @@ namespace Uno.WinAppSDKSyncGenerator
 			}
 
 			var compilation = await project.GetCompilationAsync();
+			if (IsScopedGeneration && compilation.GetSpecialType(SpecialType.System_Object).TypeKind == TypeKind.Error)
+			{
+				// API-only generation needs core type identities, not platform implementation binaries.
+				// Full generation retains the normal restored-project prerequisite above.
+				compilation = compilation.AddReferences(Basic.Reference.Assemblies.Net100.References.All);
+			}
+			if (IsScopedGeneration)
+			{
+				var references = ScopedReferences;
+				var platform = ScopedReferenceResolver.GetPlatformName(projectFile, targetFramework);
+				if (ScopedPlatformReferences.TryGetValue(platform, out var platformReferences))
+				{
+					references = ScopedReferences.Concat(platformReferences).ToArray();
+				}
+				if (references.Count > 0)
+				{
+					compilation = ScopedReferenceResolver.Resolve(compilation, references, Console.WriteLine);
+				}
+			}
 			return RunMixinGenerators(compilation, project.ParseOptions as CSharpParseOptions);
 		}
 

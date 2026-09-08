@@ -18,14 +18,11 @@ namespace Uno.UI.Runtime.Skia;
 internal sealed partial class VirtualizedSemanticRegion : IDisposable
 {
 	private readonly IntPtr _containerHandle;
-	private readonly Dictionary<int, IntPtr> _realizedHandles = new();
-	// Parallel set kept in sync with _realizedHandles.Values so ContainsRealizedHandle
-	// is O(1) on the focus/lookup hot path instead of O(n) Dictionary.ContainsValue.
-	private readonly HashSet<IntPtr> _realizedHandleSet = new();
+	private readonly VirtualizedSemanticRegionState _state = new();
+	private readonly int _generation;
 	private int _totalItemCount;
 	private bool _isFocusPinned;
 	private int? _pinnedIndex;
-	private bool _disposed;
 
 	/// <summary>
 	/// Initializes a new virtualized semantic region and registers it in the DOM.
@@ -41,37 +38,61 @@ internal sealed partial class VirtualizedSemanticRegion : IDisposable
 			this.Log().Debug($"Register container={containerHandle} role='{role}' label='{label}' multiselectable={multiselectable}");
 		}
 		_containerHandle = containerHandle;
-		NativeMethods.RegisterVirtualizedContainer(containerHandle, role, label ?? string.Empty, multiselectable);
+		_generation = NativeMethods.RegisterVirtualizedContainer(containerHandle, role, label ?? string.Empty, multiselectable);
 	}
 
 	/// <summary>Gets the handle of the virtualized container visual.</summary>
 	internal IntPtr ContainerHandle => _containerHandle;
 	/// <summary>Gets the total number of items in the data source.</summary>
 	internal int TotalItemCount => _totalItemCount;
-	/// <summary>Gets whether a focused item is pinned to prevent recycling.</summary>
+	/// <summary>Gets whether the region is tracking a focused item index.</summary>
 	internal bool IsFocusPinned => _isFocusPinned;
 	/// <summary>Gets the data index of the pinned (focused) item, if any.</summary>
 	internal int? PinnedIndex => _pinnedIndex;
 	/// <summary>True if the given item handle currently has a realized DOM node in this region.</summary>
-	internal bool ContainsRealizedHandle(IntPtr handle) => _realizedHandleSet.Contains(handle);
+	internal bool ContainsRealizedHandle(IntPtr handle) => _state.Contains(handle);
+	internal bool IsDisposed => _state.IsDisposed;
+	internal bool TryGetIndex(IntPtr handle, out int index) => _state.TryGetIndex(handle, out index);
+	internal void OwnSubscription(Action unsubscribe) => _state.Own(unsubscribe);
+
+	internal void RemoveExcept(HashSet<IntPtr> realizedHandles)
+	{
+		List<(IntPtr Handle, int Index)>? removed = null;
+		foreach (var handle in _state.Handles)
+		{
+			if (!realizedHandles.Contains(handle) && _state.TryGetIndex(handle, out var index))
+			{
+				(removed ??= new()).Add((handle, index));
+			}
+		}
+		if (removed is not null)
+		{
+			foreach (var item in removed)
+			{
+				OnItemUnrealized(item.Handle, item.Index);
+			}
+		}
+	}
 
 	/// <summary>
 	/// Called when an item is realized (ElementPrepared).
 	/// </summary>
-	internal void OnItemRealized(IntPtr itemHandle, int index, int totalCount, float x, float y, float width, float height, string role, string label)
+	internal void OnItemRealized(IntPtr itemHandle, int index, int totalCount, float x, float y, float width, float height, string role, string label, bool disabled = false, bool selected = false)
 	{
+		if (!_state.TryRealize(itemHandle, index, out var displaced))
+		{
+			return;
+		}
 		if (this.Log().IsEnabled(LogLevel.Trace))
 		{
 			this.Log().Trace($"ItemRealized container={_containerHandle} item={itemHandle} index={index} total={totalCount} role='{role}' label='{label}' pos=({x},{y}) size={width}x{height}");
 		}
-		_totalItemCount = totalCount;
-		if (_realizedHandles.TryGetValue(index, out var existing) && existing != itemHandle)
+		if (displaced != IntPtr.Zero)
 		{
-			_realizedHandleSet.Remove(existing);
+			NativeMethods.RemoveVirtualizedItem(displaced, _containerHandle, _generation);
 		}
-		_realizedHandles[index] = itemHandle;
-		_realizedHandleSet.Add(itemHandle);
-		NativeMethods.AddVirtualizedItem(_containerHandle, itemHandle, index, totalCount, x, y, width, height, role, label);
+		UpdateItemCount(totalCount);
+		NativeMethods.AddVirtualizedItem(_containerHandle, itemHandle, index, totalCount, x, y, width, height, role, label, _generation, disabled, selected);
 	}
 
 	/// <summary>
@@ -79,32 +100,21 @@ internal sealed partial class VirtualizedSemanticRegion : IDisposable
 	/// </summary>
 	internal void OnItemUnrealized(IntPtr itemHandle, int index)
 	{
-		// Don't remove if focus-pinned
-		if (_isFocusPinned && _pinnedIndex == index)
+		if (!_state.TryUnrealize(itemHandle, index))
 		{
-			if (this.Log().IsEnabled(LogLevel.Trace))
-			{
-				this.Log().Trace($"ItemUnrealized skipped (focus-pinned) container={_containerHandle} item={itemHandle} index={index}");
-			}
 			return;
 		}
-
+		if (_pinnedIndex == index)
+		{
+			// A recycled element must not keep exposing the previous item's focused identity.
+			UnpinFocusedItem();
+		}
 		if (this.Log().IsEnabled(LogLevel.Trace))
 		{
 			this.Log().Trace($"ItemUnrealized container={_containerHandle} item={itemHandle} index={index}");
 		}
 
-		// Only clear the index mapping when it still points at the same handle. If a new item was
-		// realized into this index before the unrealize callback arrived (race that OnItemRealized
-		// already partially handles), the index now belongs to a different live handle and must
-		// not be evicted. The handle being unrealized is always purged from _realizedHandleSet
-		// independently so DOM/state stay in sync.
-		if (_realizedHandles.TryGetValue(index, out var current) && current == itemHandle)
-		{
-			_realizedHandles.Remove(index);
-		}
-		_realizedHandleSet.Remove(itemHandle);
-		NativeMethods.RemoveVirtualizedItem(itemHandle);
+		NativeMethods.RemoveVirtualizedItem(itemHandle, _containerHandle, _generation);
 	}
 
 	/// <summary>
@@ -112,19 +122,27 @@ internal sealed partial class VirtualizedSemanticRegion : IDisposable
 	/// </summary>
 	internal void UpdateItemCount(int totalCount)
 	{
+		if (IsDisposed || _totalItemCount == totalCount)
+		{
+			return;
+		}
 		if (this.Log().IsEnabled(LogLevel.Debug))
 		{
 			this.Log().Debug($"UpdateItemCount container={_containerHandle} oldCount={_totalItemCount} newCount={totalCount}");
 		}
 		_totalItemCount = totalCount;
-		NativeMethods.UpdateVirtualizedItemCount(_containerHandle, totalCount);
+		NativeMethods.UpdateVirtualizedItemCount(_containerHandle, totalCount, _generation);
 	}
 
 	/// <summary>
-	/// Pins a focused item to prevent it from being recycled.
+	/// Records the focused index without overriding the control's realization lifetime.
 	/// </summary>
 	internal void PinFocusedItem(int index)
 	{
+		if (IsDisposed)
+		{
+			return;
+		}
 		if (this.Log().IsEnabled(LogLevel.Debug))
 		{
 			this.Log().Debug($"PinFocusedItem container={_containerHandle} index={index}");
@@ -148,34 +166,33 @@ internal sealed partial class VirtualizedSemanticRegion : IDisposable
 
 	public void Dispose()
 	{
-		if (!_disposed)
+		if (!IsDisposed)
 		{
 			if (this.Log().IsEnabled(LogLevel.Debug))
 			{
-				this.Log().Debug($"Dispose container={_containerHandle} realizedCount={_realizedHandles.Count}");
+				this.Log().Debug($"Dispose container={_containerHandle}");
 			}
-			_disposed = true;
-			_realizedHandles.Clear();
-			_realizedHandleSet.Clear();
-			NativeMethods.UnregisterVirtualizedContainer(_containerHandle);
+			_state.Dispose();
+			UnpinFocusedItem();
+			NativeMethods.UnregisterVirtualizedContainer(_containerHandle, _generation);
 		}
 	}
 
 	private static partial class NativeMethods
 	{
 		[JSImport("globalThis.Uno.UI.Runtime.Skia.SemanticElements.registerVirtualizedContainer")]
-		internal static partial void RegisterVirtualizedContainer(IntPtr containerHandle, string role, string label, bool multiselectable);
+		internal static partial int RegisterVirtualizedContainer(IntPtr containerHandle, string role, string label, bool multiselectable);
 
 		[JSImport("globalThis.Uno.UI.Runtime.Skia.SemanticElements.addVirtualizedItem")]
-		internal static partial void AddVirtualizedItem(IntPtr containerHandle, IntPtr itemHandle, int index, int totalCount, float x, float y, float width, float height, string role, string label);
+		internal static partial void AddVirtualizedItem(IntPtr containerHandle, IntPtr itemHandle, int index, int totalCount, float x, float y, float width, float height, string role, string label, int generation, bool disabled, bool selected);
 
 		[JSImport("globalThis.Uno.UI.Runtime.Skia.SemanticElements.removeVirtualizedItem")]
-		internal static partial void RemoveVirtualizedItem(IntPtr itemHandle);
+		internal static partial void RemoveVirtualizedItem(IntPtr itemHandle, IntPtr containerHandle, int generation);
 
 		[JSImport("globalThis.Uno.UI.Runtime.Skia.SemanticElements.updateVirtualizedItemCount")]
-		internal static partial void UpdateVirtualizedItemCount(IntPtr containerHandle, int totalCount);
+		internal static partial void UpdateVirtualizedItemCount(IntPtr containerHandle, int totalCount, int generation);
 
 		[JSImport("globalThis.Uno.UI.Runtime.Skia.SemanticElements.unregisterVirtualizedContainer")]
-		internal static partial void UnregisterVirtualizedContainer(IntPtr containerHandle);
+		internal static partial void UnregisterVirtualizedContainer(IntPtr containerHandle, int generation);
 	}
 }

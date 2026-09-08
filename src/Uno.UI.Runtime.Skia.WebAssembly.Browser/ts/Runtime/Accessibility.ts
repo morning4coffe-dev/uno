@@ -100,7 +100,7 @@ namespace Uno.UI.Runtime.Skia {
 				// Also add a keydown listener so keyboard users can activate it via Enter/Space
 				this.enableAccessibilityButton.addEventListener("keydown", (e) => {
 					if (e.key === "Enter" || e.key === " ") {
-						e.preventDefault();
+						BrowserKeyboardInputSource.consumeAccessibilityActivation(e);
 						this.onEnableAccessibilityButtonClicked(e as any);
 					}
 				});
@@ -241,6 +241,31 @@ namespace Uno.UI.Runtime.Skia {
 
 		public static getSemanticElementByHandle(handle: number): HTMLElement {
 			return document.getElementById(`uno-semantics-${handle}`)
+		}
+
+		public static moveSemanticElementBefore(handle: number, nextHandle: number): void {
+			const element = this.getSemanticElementByHandle(handle);
+			const next = this.getSemanticElementByHandle(nextHandle);
+			if (element?.parentElement && next?.parentElement === element.parentElement) {
+				element.parentElement.insertBefore(element, next);
+			}
+		}
+
+		public static reparentSemanticElement(handle: number, parentHandle: number, index: number | null): boolean {
+			const element = this.getSemanticElementByHandle(handle);
+			const parent = this.getSemanticElementByHandle(parentHandle);
+			if (!element || !parent || element === parent || element.contains(parent)) {
+				return false;
+			}
+			if (element.parentElement !== parent) {
+				const focused = document.activeElement;
+				const restoreFocus = focused instanceof HTMLElement && element.contains(focused);
+				parent.insertBefore(element, index === null ? null : parent.children[index] || null);
+				if (restoreFocus) {
+					(focused as HTMLElement).focus({ preventScroll: true });
+				}
+			}
+			return true;
 		}
 
 		public static announcePolite(text: string) {
@@ -572,6 +597,7 @@ namespace Uno.UI.Runtime.Skia {
 		}
 
 		public static updateAriaLabel(handle: number, automationId: string): void {
+			SemanticElements.updateVirtualizedItemLabel(handle, automationId);
 			Accessibility.debugLog(`[A11y] TS updateAriaLabel: handle=${handle} label='${automationId}'`);
 			const element = Accessibility.getSemanticElementByHandle(handle);
 			if (element) {
@@ -924,9 +950,10 @@ namespace Uno.UI.Runtime.Skia {
 		}
 
 		public static updateSemanticElementPositioning(handle: number, width: number, height: number, x: number, y: number) {
+			SemanticElements.updateVirtualizedItemGeometry(handle, width, height, x, y);
 			const element = Accessibility.getSemanticElementByHandle(handle);
 			if (element) {
-				element.hidden = false;
+				element.hidden = SemanticElements.isUnmeasuredVirtualizedItem(handle, width, height);
 				element.style.left = `${x}px`;
 				element.style.top = `${y}px`;
 				element.style.width = `${width}px`;

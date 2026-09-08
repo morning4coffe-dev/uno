@@ -453,12 +453,19 @@ declare namespace Uno.Storage {
     }
 }
 declare namespace Windows.Storage {
-    class StorageFolder {
+    interface IDBFSMount {
+        readonly mountpoint: string;
+        readonly type: IDBFSFileSystem;
+    }
+    interface IDBFSFileSystem {
+        syncfs(mount: IDBFSMount, populate: boolean, callback: (error?: unknown) => void): void;
+    }
+    export class StorageFolder {
         private static _isInitialized;
-        private static _isSynchronizing;
-        private static dispatchStorageInitialized;
+        private static _synchronization;
+        private static _persistentMounts;
         /**
-         * Determine if IndexDB is available, some browsers and modes disable it.
+         * Determine if IndexedDB is available, some browsers and modes disable it.
          * */
         static isIndexDBAvailable(): boolean;
         /**
@@ -468,15 +475,17 @@ declare namespace Windows.Storage {
         /**
          * Setup the storage persistence of a given path.
          * */
-        static setupStorage(path: string): void;
-        private static onStorageInitialized;
+        static setupStorage(path: string): IDBFSMount | null;
         /**
-         * Synchronize the IDBFS memory cache back to IndexedDB
-         * populate: requests the filesystem to be popuplated from the IndexedDB
-         * onSynchronized: function invoked when the synchronization finished
+         * Synchronize Uno-owned IDBFS mounts. Await false to acknowledge an IndexedDB checkpoint.
+         * populate: replace the memory cache with IndexedDB contents (initialization only).
+         * onSynchronized: receives an error on failure; the returned promise also rejects.
          * */
-        private static synchronizeFileSystem;
+        static synchronizeFileSystem(populate: boolean, onSynchronized?: (error?: unknown) => void): Promise<void>;
+        private static queueSynchronization;
+        private static runSynchronization;
     }
+    export {};
 }
 declare namespace Windows.Storage.Pickers {
     class FileOpenPicker {

@@ -8,6 +8,10 @@ namespace Microsoft.UI.Xaml.Controls.Primitives;
 
 partial class SelectorItem
 {
+#if __SKIA__
+	public override string GetAccessibilityInnerText() => GetPlainText();
+#endif
+
 	// If this item is unfocused, sets focus on the SelectorItem.
 	// Otherwise, sets focus to whichever element currently has focus
 	// (so focusState can be propagated).
@@ -97,6 +101,16 @@ partial class SelectorItem
 		// ContentControl.
 		if (string.IsNullOrEmpty(strPlainText))
 		{
+#if __SKIA__
+			if (Uno.UI.Accessibility.TemplateAutomationText.GetName(contentTemplateRoot as FrameworkElement ?? this) is { Length: > 0 } templateName)
+			{
+				return templateName;
+			}
+			if (ContentTemplate is not null || ContentTemplateSelector is not null)
+			{
+				return string.Empty;
+			}
+#endif
 			return base.GetPlainText();
 		}
 

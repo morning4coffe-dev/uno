@@ -102,6 +102,15 @@
 		<DefineConstants>$(DefineConstants);__APPLE_UIKIT__</DefineConstants>
 	</PropertyGroup>
 
+	<!-- The sync tool does not run the Apple SDK's implicit compiler-defines target.
+	     Generated API declarations still require the resolved platform's symbol. -->
+	<PropertyGroup Condition="'$(SyncGeneratorRunning)'=='true' and $(IsIOS)">
+		<DefineConstants>$(DefineConstants);__IOS__</DefineConstants>
+	</PropertyGroup>
+	<PropertyGroup Condition="'$(SyncGeneratorRunning)'=='true' and $(IsTvOS)">
+		<DefineConstants>$(DefineConstants);__TVOS__</DefineConstants>
+	</PropertyGroup>
+
 	<PropertyGroup Condition="$(IsAndroid)">
 		<DefineConstants>$(DefineConstants);__ANDROID__;XAMARIN;HAS_NATIVE_IMPLICIT_POINTER_CAPTURE;HAS_RENDER_TARGET_BITMAP</DefineConstants>
 		<SupportedOSPlatformVersion>21.0</SupportedOSPlatformVersion>

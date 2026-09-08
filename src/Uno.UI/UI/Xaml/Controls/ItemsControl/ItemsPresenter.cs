@@ -234,6 +234,16 @@ namespace Microsoft.UI.Xaml.Controls
 				Padding :
 				Thickness.Empty;
 
+		internal (double Leading, double Trailing) GetPanelExtentOffsets()
+		{
+			var padding = AppliedPadding;
+			var header = HeaderFooterEnabled ? HeaderContentControl?.DesiredSize ?? default : default;
+			var footer = HeaderFooterEnabled ? FooterContentControl?.DesiredSize ?? default : default;
+			return Orientation == Orientation.Horizontal
+				? (padding.Left + header.Width, padding.Right + footer.Width)
+				: (padding.Top + header.Height, padding.Bottom + footer.Height);
+		}
+
 		protected override bool IsSimpleLayout => true;
 
 		private _ViewGroup _itemsPanel;

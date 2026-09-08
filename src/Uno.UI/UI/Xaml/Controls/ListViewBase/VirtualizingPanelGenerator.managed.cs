@@ -133,6 +133,23 @@ namespace Microsoft.UI.Xaml.Controls
 		}
 
 		/// <summary>
+		/// Return a measurement-only container without clearing an application's own item.
+		/// An already attached own container remains available to its materialized line.
+		/// </summary>
+		internal void ReleaseMeasuredView(FrameworkElement container, int index, bool wasAttached)
+		{
+			if (GetItemId(index) == IsOwnContainerItemId)
+			{
+				if (!wasAttached && container.Parent is Panel parent)
+				{
+					parent.Children.Remove(container);
+				}
+				return;
+			}
+			RecycleViewForItem(container, index, clearContainer: false);
+		}
+
+		/// <summary>
 		/// Try to retrieve a cached container for a given template <paramref name="id"/>. Returns null if none is available.
 		/// </summary>
 		private FrameworkElement? TryDequeueCachedContainer(int id)
@@ -234,13 +251,29 @@ namespace Microsoft.UI.Xaml.Controls
 		/// </summary>
 		private void DiscardContainer(FrameworkElement container)
 		{
+			ItemsControl?.CleanUpContainer(container);
 			if (container.Parent is Panel parent)
 			{
-				// Clear the container's Content and DataContext
-				ItemsControl?.CleanUpContainer(container);
-
 				parent.Children.Remove(container);
 			}
+		}
+
+		internal void Clear()
+		{
+			foreach (var cache in _itemContainerCache.Values)
+			{
+				foreach (var container in cache)
+				{
+					DiscardContainer(container);
+				}
+			}
+			foreach (var container in _scrapCache.Values)
+			{
+				DiscardContainer(container);
+			}
+			_itemContainerCache.Clear();
+			_scrapCache.Clear();
+			_idCache.Clear();
 		}
 
 		/// <summary>

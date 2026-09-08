@@ -1,4 +1,4 @@
-﻿#if !IS_UNIT_TESTS && !UNO_REFERENCE_API
+﻿#if !IS_UNIT_TESTS
 using System;
 using System.Collections.Generic;
 using System.Text;
@@ -14,7 +14,12 @@ namespace Microsoft.UI.Xaml.Controls
 
 		public int LastVisibleIndex => _layout?.LastVisibleIndex ?? -1;
 
-		internal override Orientation? PhysicalOrientation => Orientation;
+		internal override Orientation? PhysicalOrientation =>
+#if UNO_REFERENCE_API
+			Orientation == Orientation.Horizontal ? Orientation.Vertical : Orientation.Horizontal;
+#else
+			Orientation;
+#endif
 
 #if __ANDROID__
 		public int FirstCacheIndex => _layout.XamlParent.NativePanel.ViewCache.FirstCacheIndex;
@@ -36,9 +41,19 @@ namespace Microsoft.UI.Xaml.Controls
 			{
 				CacheLength = FeatureConfiguration.ListViewBase.DefaultCacheLength.Value;
 			}
+#if UNO_REFERENCE_API
+			CreateLayoutIfNeeded();
+			_layout.Initialize(this);
+#endif
 		}
 
 		VirtualizingPanelLayout IVirtualizingPanel.GetLayouter()
+		{
+			CreateLayoutIfNeeded();
+			return _layout;
+		}
+
+		private void CreateLayoutIfNeeded()
 		{
 			if (_layout == null)
 			{
@@ -50,17 +65,16 @@ namespace Microsoft.UI.Xaml.Controls
 				_layout.BindToEquivalentProperty(this, nameof(MaximumRowsOrColumns));
 				_layout.BindToEquivalentProperty(this, nameof(GroupHeaderPlacement));
 				_layout.BindToEquivalentProperty(this, nameof(GroupPadding));
-#if __ANDROID__
+#if __ANDROID__ || UNO_REFERENCE_API
 				_layout.BindToEquivalentProperty(this, nameof(CacheLength));
 #endif
 			}
-			return _layout;
 		}
 
 		// In WinUI, this is actually for ModernCollectionBasePanel
 		internal override bool WantsScrollViewerToObscureAvailableSizeBasedOnScrollBarVisibility(Orientation orientation)
 		{
-			return Orientation == orientation;
+			return PhysicalOrientation == orientation;
 		}
 	}
 }

@@ -37,19 +37,47 @@ While it is possible to write files in any paths, only some folders are persiste
 - `ApplicationData.Current.RoamingFolder`
 - `ApplicationData.Current.SharedLocalFolder`
 
-Note that the initialization of the filesystem is asynchronous. This means that reading a file during `Application.OnLaunched` using `System.IO.File.OpenRead` may fail to find a file that was previously written, because the filesystem is not available yet.
+### Waiting for initialization
 
-The optimal way to open a file is to use the following:
+Filesystem initialization is asynchronous. Application launch is not an initialization barrier: WebAssembly startup begins persistence initialization without awaiting it before scheduling `Application.OnLaunched`. Application construction occurs even earlier. Consequently, `System.IO` or SQLite can open a file before its persistent contents have been restored.
+
+Before accessing an existing application-data directory through `System.IO` or SQLite, explicitly await `StorageFolder.GetFolderFromPathAsync`:
 
 ```csharp
-var localFolder = Windows.Storage.ApplicationData.Current.LocalFolder;
+var localFolder = await Windows.Storage.StorageFolder.GetFolderFromPathAsync(
+    Windows.Storage.ApplicationData.Current.LocalFolder.Path);
 var folder = await localFolder.CreateFolderAsync("myFolder", CreationCollisionOption.OpenIfExists);
 File.WriteAllText(Path.Combine(folder.Path, "MyFile.txt"), DateTime.Now.ToLongDateString());
 ```
 
-Note that for WebAssembly in particular, the `await localFolder.CreateFolderAsync` is important to ensure that the file system has properly been initialized from the IDBFS persistence. Any asynchronous operation from StorageFolder awaits for the filesystem's initialization before continuing.
+`GetFolderFromPathAsync` unconditionally awaits the storage-initialization gate before checking that the directory exists. Pass the directory actually used by the database; for example, a .NET MAUI application can pass `FileSystem.AppDataDirectory`. Perform this await **before constructing a SQLite connection or running schema initialization, migrations, queries, or writes**. Keep the barrier and database initialization under the same asynchronous initialization/operation lock used by database callers. Do not synchronously block an application constructor waiting for initialization.
+
+Not every asynchronous `StorageFolder` API is a reliable barrier. In particular, `GetItemsAsync` and `GetFilesAsync` may return an empty enumeration without awaiting initialization. Do not use them to establish readiness. `CreateFolderAsync` also awaits initialization, but creating a different directory is unnecessary when opening an existing database.
 
 Note that you can view the content of the **IndexedDB** in the Application tab of your browser, in the **Storage / IndexedDB** section.
+
+### WebAssembly persistence checkpoints
+
+File writes (including `FileStream.Flush`, `FileIO` operations, and SQLite commits) update an in-memory filesystem. They do **not** acknowledge a write to IndexedDB. Uno attempts a checkpoint every ten seconds and when the page becomes hidden or unloads. These attempts are best effort: browsers do not wait for asynchronous IndexedDB work when navigating, closing, or terminating a page. A successful file write can therefore be lost on an immediate reload.
+
+When the application must acknowledge a checkpoint before navigating or displaying a persisted-save confirmation, finish the writes and await the existing JavaScript synchronization entry point through Uno's asynchronous interop:
+
+```csharp
+// WebAssembly only. Initialize the folder asynchronously before using System.IO or SQLite.
+await Uno.Foundation.WebAssemblyRuntime.InvokeAsync(
+    "Windows.Storage.StorageFolder.synchronizeFileSystem(false).then(() => 'checkpoint-complete')",
+    cancellationToken);
+```
+
+The returned task completes after Emscripten reports completion of the IndexedDB synchronization, or throws on failure. The JavaScript method returns `Promise<void>`; the string projection above matches `InvokeAsync`'s `Promise<string>` contract. Invoking the unprojected promise completes with a `null` result, not a durability status. Cancelling the managed wait does not cancel an in-flight IndexedDB transaction and must not be interpreted as an acknowledgement.
+
+Keep application writes serialized with the checkpoint; for databases, finish the transaction and prevent concurrent database changes during synchronization. The checkpoint covers all IDBFS mounts registered by Uno, not just one file. It does not acknowledge stores mounted directly by application JavaScript or other libraries. If no Uno-owned mounts exist, the checkpoint rejects instead of acknowledging a no-op; this validation failure does not prevent subsequent initialization. Do not pass `true`: that direction restores IndexedDB contents into memory and can overwrite unpersisted changes.
+
+Synchronization requests are queued, including requests made during another checkpoint. Application-data initialization awaits restoration of all its folders and propagates restoration failures to asynchronous storage operations instead of leaving them waiting indefinitely. Initializing an unrelated mount does not complete the application-data initialization gate. Adding a persistent mount restores only that mount, without replacing existing in-memory files.
+
+If backend synchronization fails or does not complete within one minute, subsequent requests fail as well until the page is reloaded. Emscripten cannot cancel an outstanding synchronization; starting another batch would risk overlapping operations. Handle the exception and do not report that changes were persisted. Reloading can discard unacknowledged changes.
+
+When IDBFS is disabled or IndexedDB is unavailable at startup, storage initialization still succeeds for compatibility, but storage remains non-persistent. An explicit checkpoint rejects when persistence is unavailable instead of acknowledging a no-op. Even with persistence enabled, checkpoints do not protect against browser storage eviction, user-cleared data, conflicts with another tab writing the same files, or device failure. For critical data, use an appropriate remote persistence strategy.
 
 ## Support for `StorageFile.GetFileFromApplicationUriAsync`
 
