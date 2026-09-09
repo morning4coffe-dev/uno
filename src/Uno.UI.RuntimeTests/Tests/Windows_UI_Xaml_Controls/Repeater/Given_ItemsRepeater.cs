@@ -29,6 +29,44 @@ namespace Uno.UI.RuntimeTests.Tests.Windows_UI_Xaml_Controls.Repeater
 	public class Given_ItemsRepeater
 	{
 		[TestMethod]
+		[DataRow(false)]
+		[DataRow(true)]
+		[RunsOnUIThread]
+		public async Task When_Template_Is_Cleared_Then_Default_Rendering_Resumes(bool clearSourceFirst)
+		{
+			var repeater = new ItemsRepeater
+			{
+				ItemsSource = new[] { "first", "second" },
+				ItemTemplate = (DataTemplate)Microsoft.UI.Xaml.Markup.XamlReader.Load(
+					"<DataTemplate xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'><TextBlock Text='custom'/></DataTemplate>")
+			};
+			var host = new ScrollViewer { Width = 320, Height = 240, Content = repeater };
+			try
+			{
+				await UITestHelper.Load(host);
+				await TestServices.WindowHelper.WaitFor(() => repeater.TryGetElement(0) is TextBlock { Text: "custom" });
+				if (clearSourceFirst)
+				{
+					repeater.ItemsSource = null;
+				}
+				repeater.ItemTemplate = null;
+				if (clearSourceFirst)
+				{
+					repeater.ItemsSource = new[] { "first", "second" };
+				}
+				await TestServices.WindowHelper.WaitFor(() => repeater.TryGetElement(0) is TextBlock { Text: "first" });
+				await TestServices.WindowHelper.WaitFor(() => repeater.TryGetElement(1) is TextBlock { Text: "second" });
+				Assert.IsTrue(repeater.GetAllChildren().OfType<TextBlock>()
+					.Where(text => text.Text == "custom").All(text => repeater.GetElementIndex(text) < 0),
+					"Recycled template objects must not remain realized items.");
+			}
+			finally
+			{
+				TestServices.WindowHelper.WindowContent = null;
+			}
+		}
+
+		[TestMethod]
 		[RunsOnUIThread]
 		[PlatformCondition(ConditionMode.Exclude, RuntimeTestPlatforms.NativeWinUI)]
 		public async Task When_NoScrollViewer_Then_ShowMoreThanFirstItem()
