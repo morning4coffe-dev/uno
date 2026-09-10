@@ -6,6 +6,7 @@ using System.Text;
 using System.Threading.Tasks;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
+using Microsoft.UI.Xaml.Data;
 using Uno.UI.Helpers;
 
 namespace Uno.UI.Tests.Windows_UI_XAML_Controls.SelectorTests
@@ -13,6 +14,23 @@ namespace Uno.UI.Tests.Windows_UI_XAML_Controls.SelectorTests
 	[TestClass]
 	public class Given_Selector
 	{
+		[TestMethod]
+		public void When_Empty_CollectionView_Has_Current_Position_Then_Selection_Remains_Empty()
+		{
+			var source = new CollectionViewSource
+			{
+				Source = Array.Empty<object>()
+			};
+			var sut = new Selector
+			{
+				ItemsSource = source.View
+			};
+
+			Assert.AreEqual(0, source.View.CurrentPosition);
+			Assert.AreEqual(-1, sut.SelectedIndex);
+			Assert.IsNull(sut.SelectedItem);
+		}
+
 		[TestMethod]
 		public void When_Empty_SelectedValuePath()
 		{

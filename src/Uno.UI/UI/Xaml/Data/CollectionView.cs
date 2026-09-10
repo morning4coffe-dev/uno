@@ -3,19 +3,25 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using Uno;
 using Uno.Extensions;
 using Uno.Extensions.Specialized;
 using Windows.Foundation;
 using Windows.Foundation.Collections;
+using Windows.UI.Core;
 
 namespace Microsoft.UI.Xaml.Data
 {
 	internal partial class CollectionView : ICollectionView
 	{
+		private static readonly ConditionalWeakTable<INotifyCollectionChanged, CollectionChangedHub> _collectionChangedHubs = new();
 		private IEnumerable _collection;
 		private readonly bool _isGrouped;
 		private readonly PropertyPath _itemsPath;
+		private readonly IDisposable _collectionChangedSubscription;
+		private object _currentItem;
+		private bool _isProcessingCollectionChange;
 
 		public CollectionView(IEnumerable collection, bool isGrouped, PropertyPath itemsPath)
 		{
@@ -25,57 +31,175 @@ namespace Microsoft.UI.Xaml.Data
 
 			if (isGrouped)
 			{
-				var collectionGroups = new ObservableVector<object>();
-				foreach (var group in collection)
-				{
-					collectionGroups.Add(new CollectionViewGroup(group, _itemsPath));
-				}
-
-				CollectionGroups = collectionGroups;
-
-				if (_collection is INotifyCollectionChanged observableCollection)
-				{
-					observableCollection.CollectionChanged += OnCollectionChangedUpdateGroups;
-				}
+				CollectionGroups = new ObservableVector<object>();
+				RebuildGroups();
 			}
+
+			if (_collection is INotifyCollectionChanged observableCollection)
+			{
+				_collectionChangedSubscription = _collectionChangedHubs
+					.GetValue(observableCollection, static source => new CollectionChangedHub(source))
+					.Register(this);
+			}
+
+			_currentItem = GetItemAtCurrentPosition();
 		}
 
 		public IEnumerable InnerCollection => _collection;
 
-		private void OnCollectionChangedUpdateGroups(object sender, NotifyCollectionChangedEventArgs e)
+		private void OnCollectionChanged(object sender, NotifyCollectionChangedEventArgs e)
+		{
+			if (_isGrouped)
+			{
+				UpdateGroups(e);
+			}
+			else
+			{
+				var previousPosition = CurrentPosition;
+				var previousItem = _currentItem;
+				var wasEmptyBeforeChange =
+					e.Action == NotifyCollectionChangedAction.Add &&
+					Count == e.NewItems.Count;
+				_isProcessingCollectionChange = true;
+				try
+				{
+					VectorChanged?.Invoke(this, e.ToVectorChangedEventArgs());
+				}
+				finally
+				{
+					_isProcessingCollectionChange = false;
+				}
+				CurrentPosition = GetAdjustedCurrentPosition(e, previousPosition, wasEmptyBeforeChange);
+				_currentItem = GetItemAtCurrentPosition();
+
+				var currentOccurrenceChanged = previousPosition >= 0 &&
+					(e.Action == NotifyCollectionChangedAction.Reset ||
+						(e.Action is NotifyCollectionChangedAction.Remove or NotifyCollectionChangedAction.Replace &&
+							e.OldStartingIndex >= 0 && previousPosition >= e.OldStartingIndex &&
+							previousPosition - e.OldStartingIndex < e.OldItems.Count));
+				if (currentOccurrenceChanged || previousPosition != CurrentPosition || !Equals(previousItem, _currentItem))
+				{
+					CurrentChanged?.Invoke(this, null);
+				}
+			}
+		}
+
+		private int GetAdjustedCurrentPosition(
+			NotifyCollectionChangedEventArgs args,
+			int previousPosition,
+			bool wasEmptyBeforeChange)
+		{
+			if (previousPosition < 0)
+			{
+				return previousPosition;
+			}
+
+			var count = Count;
+			if (count == 0)
+			{
+				return 0;
+			}
+
+			return args.Action switch
+			{
+				NotifyCollectionChangedAction.Add when wasEmptyBeforeChange => Math.Min(previousPosition, count - 1),
+				NotifyCollectionChangedAction.Add when args.NewStartingIndex >= 0 && args.NewStartingIndex <= previousPosition
+					=> previousPosition + args.NewItems.Count,
+				NotifyCollectionChangedAction.Remove when args.OldStartingIndex >= 0 &&
+					previousPosition >= args.OldStartingIndex + args.OldItems.Count
+					=> previousPosition - args.OldItems.Count,
+				NotifyCollectionChangedAction.Remove when args.OldStartingIndex >= 0 &&
+					previousPosition >= args.OldStartingIndex
+					=> Math.Min(args.OldStartingIndex, count - 1),
+				NotifyCollectionChangedAction.Replace when args.OldStartingIndex >= 0 &&
+					previousPosition >= args.OldStartingIndex + args.OldItems.Count
+					=> Math.Clamp(previousPosition + args.NewItems.Count - args.OldItems.Count, 0, count - 1),
+				NotifyCollectionChangedAction.Replace when args.OldStartingIndex >= 0 &&
+					previousPosition >= args.OldStartingIndex
+					=> Math.Min(args.NewStartingIndex + Math.Min(previousPosition - args.OldStartingIndex, args.NewItems.Count - 1), count - 1),
+				NotifyCollectionChangedAction.Move => GetPositionAfterMove(args, previousPosition),
+				NotifyCollectionChangedAction.Reset => Math.Min(previousPosition, count - 1),
+				_ => Math.Min(previousPosition, count - 1),
+			};
+		}
+
+		private static int GetPositionAfterMove(NotifyCollectionChangedEventArgs args, int previousPosition)
+		{
+			var movedCount = args.OldItems.Count;
+			if (previousPosition >= args.OldStartingIndex && previousPosition < args.OldStartingIndex + movedCount)
+			{
+				return args.NewStartingIndex + previousPosition - args.OldStartingIndex;
+			}
+
+			var position = previousPosition;
+			if (position >= args.OldStartingIndex + movedCount)
+			{
+				position -= movedCount;
+			}
+			if (position >= args.NewStartingIndex)
+			{
+				position += movedCount;
+			}
+			return position;
+		}
+
+		private object GetItemAtCurrentPosition()
+			=> CurrentPosition >= 0 && CurrentPosition < Count
+				? _isGrouped ? AsEnumerable.ElementAt(CurrentPosition) : _collection.ElementAt(CurrentPosition)
+				: null;
+
+		private void RebuildGroups()
+		{
+			CollectionGroups.Clear();
+			foreach (var group in _collection)
+			{
+				CollectionGroups.Add(new CollectionViewGroup(group, _itemsPath));
+			}
+		}
+
+		private void UpdateGroups(NotifyCollectionChangedEventArgs e)
 		{
 			switch (e.Action)
 			{
 				case NotifyCollectionChangedAction.Add:
-					for (int i = e.NewStartingIndex; i < e.NewStartingIndex + e.NewItems.Count; i++)
+					for (var i = 0; i < e.NewItems.Count; i++)
 					{
-						CollectionGroups.Insert(i, new CollectionViewGroup(_collection.ElementAt(i), _itemsPath));
+						CollectionGroups.Insert(
+							e.NewStartingIndex + i,
+							new CollectionViewGroup(e.NewItems[i], _itemsPath));
 					}
 					break;
-				case NotifyCollectionChangedAction.Move:
 
-					for (int i = e.OldStartingIndex + e.OldItems.Count - 1; i >= e.OldStartingIndex; i--)
-					{
-						//TODO: Untested. This may be incorrect if OldItems.Count > 1.
-						var group = CollectionGroups[i];
-						CollectionGroups.RemoveAt(i);
-						CollectionGroups.Insert(i, group);
-					}
-					break;
 				case NotifyCollectionChangedAction.Remove:
-					for (int i = e.OldStartingIndex + e.OldItems.Count - 1; i >= e.OldStartingIndex; i--)
+					for (var i = e.OldItems.Count - 1; i >= 0; i--)
 					{
-						CollectionGroups.RemoveAt(i);
+						CollectionGroups.RemoveAt(e.OldStartingIndex + i);
 					}
 					break;
+
 				case NotifyCollectionChangedAction.Replace:
-					for (int i = e.NewStartingIndex; i < e.NewStartingIndex + e.NewItems.Count; i++)
+					for (var i = 0; i < e.NewItems.Count; i++)
 					{
-						CollectionGroups[i] = new CollectionViewGroup(_collection.ElementAt(i), _itemsPath);
+						CollectionGroups[e.NewStartingIndex + i] =
+							new CollectionViewGroup(e.NewItems[i], _itemsPath);
 					}
 					break;
+
+				case NotifyCollectionChangedAction.Move:
+					var moved = new List<object>();
+					for (var i = 0; i < e.OldItems.Count; i++)
+					{
+						moved.Add(CollectionGroups[e.OldStartingIndex]);
+						CollectionGroups.RemoveAt(e.OldStartingIndex);
+					}
+					for (var i = 0; i < moved.Count; i++)
+					{
+						CollectionGroups.Insert(e.NewStartingIndex + i, moved[i]);
+					}
+					break;
+
 				case NotifyCollectionChangedAction.Reset:
-					CollectionGroups.Clear();
+					RebuildGroups();
 					break;
 			}
 		}
@@ -120,7 +244,9 @@ namespace Microsoft.UI.Xaml.Data
 			{
 				if (!_isGrouped)
 				{
-					return CurrentPosition >= 0 && CurrentPosition < Count ? _collection.ElementAt(CurrentPosition) : null;
+					return _collectionChangedSubscription is null
+						? GetItemAtCurrentPosition()
+						: _currentItem;
 				}
 				else
 				{
@@ -166,10 +292,7 @@ namespace Microsoft.UI.Xaml.Data
 		public event EventHandler<object> CurrentChanged;
 		public event CurrentChangingEventHandler CurrentChanging;
 
-#pragma warning disable 67 // Unused member
-		[NotImplemented]
-		public event VectorChangedEventHandler<object> VectorChanged; //TODO: this should be raised if underlying source implements INotifyCollectionChanged
-#pragma warning restore 67 // Unused member
+		public event VectorChangedEventHandler<object> VectorChanged;
 
 		public IAsyncOperation<LoadMoreItemsResult> LoadMoreItemsAsync(uint count)
 		{
@@ -201,6 +324,11 @@ namespace Microsoft.UI.Xaml.Data
 
 		public bool MoveCurrentToPosition(int index)
 		{
+			if (_isProcessingCollectionChange)
+			{
+				return false;
+			}
+
 			if (index != CurrentPosition)
 			{
 				if (index < -1 || index >= Count)
@@ -215,6 +343,7 @@ namespace Microsoft.UI.Xaml.Data
 					return false;
 				}
 				CurrentPosition = index;
+				_currentItem = GetItemAtCurrentPosition();
 				CurrentChanged?.Invoke(this, null); // null matches Windows here
 				return true;
 			}
@@ -290,5 +419,30 @@ namespace Microsoft.UI.Xaml.Data
 		}
 
 		void IList<object>.RemoveAt(int index) => (_collection as IList ?? throw new NotSupportedException()).RemoveAt(index);
+
+		private sealed class CollectionChangedHub
+		{
+			private readonly WeakEventHelper.WeakEventCollection _handlers = new();
+
+			public CollectionChangedHub(INotifyCollectionChanged source)
+			{
+				source.CollectionChanged += OnCollectionChanged;
+			}
+
+			public IDisposable Register(CollectionView owner)
+			{
+				NotifyCollectionChangedEventHandler handler = owner.OnCollectionChanged;
+				return WeakEventHelper.RegisterEvent(
+					_handlers,
+					handler,
+					static (registeredHandler, sender, args) =>
+						((NotifyCollectionChangedEventHandler)registeredHandler)(
+							sender,
+							(NotifyCollectionChangedEventArgs)args));
+			}
+
+			private void OnCollectionChanged(object sender, NotifyCollectionChangedEventArgs args)
+				=> _handlers.Invoke(sender, args);
+		}
 	}
 }

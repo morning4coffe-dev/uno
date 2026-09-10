@@ -506,7 +506,10 @@ namespace Microsoft.UI.Xaml.Controls.Primitives
 				EventHandler<object> currentChangedHandler = OnCollectionViewCurrentChanged;
 				_collectionViewSubscription.Disposable = Disposable.Create(() => collectionView.CurrentChanged -= currentChangedHandler);
 				collectionView.CurrentChanged += currentChangedHandler;
-				SelectedIndex = collectionView.CurrentPosition;
+				var currentPosition = collectionView.CurrentPosition;
+				SelectedIndex = currentPosition >= 0 && currentPosition < NumberOfItems
+					? currentPosition
+					: -1;
 			}
 			else
 			{
