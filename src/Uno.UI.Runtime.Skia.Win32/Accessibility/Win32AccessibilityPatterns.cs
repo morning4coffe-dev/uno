@@ -10,12 +10,6 @@ namespace Uno.UI.Runtime.Skia.Win32;
 // UIA COM Pattern Interfaces
 // Method ordering must match the COM vtable layout exactly (from UIAutomationCore.idl).
 
-[ComImport, Guid("54fcb24b-e18e-47a2-b4d3-eccbe77599a2"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-internal interface IUiaInvokeProvider
-{
-	void Invoke();
-}
-
 [ComImport, Guid("56d00bd0-c4f4-433c-a836-1a52a57e0892"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
 internal interface IUiaToggleProvider
 {
@@ -258,14 +252,6 @@ internal interface IUiaTextEditProvider // : IUiaTextProvider — flattened for 
 // Wrapper classes that bridge Uno AutomationPeer patterns to UIA COM pattern interfaces.
 // Each wrapper is [ComVisible(true)] so the CLR creates a COM Callable Wrapper (CCW)
 // that UIA can consume directly.
-
-[ComVisible(true)]
-internal sealed class UiaInvokeProviderWrapper : IUiaInvokeProvider
-{
-	private readonly IInvokeProvider _inner;
-	internal UiaInvokeProviderWrapper(IInvokeProvider inner) => _inner = inner;
-	public void Invoke() => _inner.Invoke();
-}
 
 [ComVisible(true)]
 internal sealed class UiaToggleProviderWrapper : IUiaToggleProvider

@@ -28,6 +28,10 @@ internal sealed class TestNativeWindowWrapper : NativeWindowWrapperBase
 	}
 
 	public override object? NativeWindow => null;
+
+	public int CloseCount { get; private set; }
+
+	protected override void CloseCore() => CloseCount++;
 }
 
 /// <summary>

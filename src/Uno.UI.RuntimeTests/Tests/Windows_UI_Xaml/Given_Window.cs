@@ -319,6 +319,52 @@ public class Given_Window
 	}
 
 	[TestMethod]
+	[DataRow(false)]
+	[DataRow(true)]
+	[RunsOnUIThread]
+	[PlatformCondition(ConditionMode.Include, RuntimeTestPlatforms.SkiaWin32)]
+	public async Task When_Closed_Callback_Clears_Content_Native_Window_Is_Destroyed(bool clearContent)
+	{
+#if __SKIA__
+		var content = new Border { Width = 100, Height = 100 };
+		var sut = new Window { Title = $"Close lifecycle {Guid.NewGuid():N}", Content = content };
+		var closedCount = 0;
+		sut.Closed += (_, _) =>
+		{
+			closedCount++;
+			if (clearContent)
+			{
+				sut.Content = null;
+			}
+		};
+		try
+		{
+			sut.Activate();
+			await TestServices.WindowHelper.WaitForLoaded(content);
+			var hwnd = FindNativeWindow(IntPtr.Zero, sut.Title);
+			Assert.AreNotEqual(IntPtr.Zero, hwnd, "The test must observe its actual native HWND.");
+			Assert.IsTrue(IsNativeWindow(hwnd));
+			sut.Close();
+			Assert.AreEqual(1, closedCount);
+			Assert.IsFalse(IsNativeWindow(hwnd), "Logical closure or cleared content must not leave the native HWND alive.");
+		}
+		finally
+		{
+			sut.Close();
+		}
+#endif
+	}
+
+#if __SKIA__
+	[System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "FindWindowW", CharSet = System.Runtime.InteropServices.CharSet.Unicode, ExactSpelling = true)]
+	private static extern IntPtr FindNativeWindow(IntPtr className, string windowName);
+
+	[System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "IsWindow", ExactSpelling = true)]
+	[return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+	private static extern bool IsNativeWindow(IntPtr hwnd);
+#endif
+
+	[TestMethod]
 	[RunsOnUIThread]
 	[PlatformCondition(ConditionMode.Exclude, RuntimeTestPlatforms.NativeWinUI)]
 	public async Task When_Window_Closed_Is_Handled()

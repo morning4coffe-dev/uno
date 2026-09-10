@@ -82,7 +82,7 @@ internal class Win32RawElementProvider :
 			{
 				Win32UIAutomationInterop.UIA_InvokePatternId
 					when peer.GetPattern(PatternInterface.Invoke) is IInvokeProvider invoke
-					=> new UiaInvokeProviderWrapper(invoke),
+					=> new UiaInvokeProviderWrapper(invoke, _owner.DispatcherQueue, () => _accessibility.IsAccessibilityEnabled, peer.IsEnabled),
 				Win32UIAutomationInterop.UIA_TogglePatternId
 					when peer.GetPattern(PatternInterface.Toggle) is IToggleProvider toggle
 					=> new UiaToggleProviderWrapper(toggle),

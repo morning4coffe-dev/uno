@@ -65,6 +65,44 @@ Each platform applies its own pruning strategy. For example, WASM prunes structu
 - **macOS** — Each peer becomes an `NSAccessibilityElement` that VoiceOver can discover.
 - **WASM** — Each peer produces a hidden DOM element with appropriate ARIA attributes (`role`, `aria-label`, `aria-checked`, etc.).
 
+On Win32, UIA `Invoke` requests are queued to the element's dispatcher rather
+than running control callbacks on the COM caller thread. The request returns
+before the action executes, including actions that close their own window.
+Queued requests are discarded if the owning accessibility host is disposed;
+new requests against a disposed host report that the element is unavailable.
+Regression coverage includes `Given_UiaInvokeProviderWrapper` and the
+Skia Win32 `Given_Window.When_Closed_Callback_Clears_Content_Native_Window_Is_Destroyed`
+test, which checks actual HWND removal rather than only logical window visibility.
+
+### Peer-declared child exclusions on Skia WASM
+
+An element-backed `FrameworkElementAutomationPeer` can omit ordinary visual
+child-owner roots from `GetChildrenCore`. The browser bridge excludes those
+branches from its semantic DOM without unloading or hiding the visual elements.
+Use the elements' cached peers, and call `InvalidatePeer` or raise
+`AutomationEvents.StructureChanged` after updating the child selection and
+visual collection consistently. Repeated notifications are coalesced to read
+the final child selection.
+Inserted and re-included branches retain their final visual sibling order in
+the semantic DOM, including branches whose structural parents have no DOM node.
+This includes the realized visual children of Raw list and repeater containers;
+the control type alone does not establish a semantic boundary.
+
+This is an exclusion bridge, not a replacement for the visual-tree-based
+browser accessibility implementation. Ownerless peers, parent-owned proxies,
+and ambiguous owner mappings do not identify an ordinary branch to exclude.
+`ListViewBase` and `ItemsRepeater` retain their realized-item lifecycle; the
+bridge does not enumerate their data-backed peer children. Setting a container
+to `AccessibilityView.Raw` alone does not exclude its descendants.
+
+For browser regressions, run `Given_PeerDeclaredChildren` alongside
+`Given_AccessibleAria`, `Given_AccessibleComboBox`, `Given_AccessibleListView`,
+and `Given_AccessibleScrollViewer`. Also run
+`When_Initial_Tree_Excludes_Retained_Branch` alone in a fresh browser context so
+the accessibility-enable-after-attach case starts cold. The excluded list and
+repeater tests retain the 100,000-item / at-most-100-realized bound, including
+exclusion, re-inclusion, and source replacement.
+
 ## See also
 
 - [Accessibility overview](xref:Uno.Features.Accessibility)
