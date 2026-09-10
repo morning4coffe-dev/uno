@@ -80,6 +80,10 @@ internal partial class WebAssemblyAccessibility
 	{
 		foreach (var child in element.GetChildren())
 		{
+			if (IsPeerExcluded(child))
+			{
+				continue;
+			}
 			if (TryGetSemanticParentHandle(child.Visual.Handle, out var parent))
 			{
 				UpdateSemanticElementGeometry(child.Visual.Handle, child, parent);
@@ -95,7 +99,7 @@ internal partial class WebAssemblyAccessibility
 	{
 		NativeDispatcher.Main.Enqueue(() =>
 		{
-			if (IsAccessibilityEnabled && IsAttachedToSemanticRoot(element))
+			if (!IsDisposed && IsAccessibilityEnabled && IsAttachedToSemanticRoot(element) && !IsPeerExcluded(element))
 			{
 				UpdateSemanticSubtreeGeometry(element);
 			}
@@ -104,6 +108,10 @@ internal partial class WebAssemblyAccessibility
 
 	private void UpdateSemanticSubtreeGeometry(UIElement element)
 	{
+		if (IsPeerExcluded(element))
+		{
+			return;
+		}
 		if (TryGetSemanticParentHandle(element.Visual.Handle, out var parent))
 		{
 			UpdateSemanticElementGeometry(element.Visual.Handle, element, parent);

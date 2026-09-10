@@ -217,9 +217,96 @@ namespace Uno.UI.RuntimeTests.Tests.Windows_UI_Xaml_Automation
 			Assert.AreNotEqual("0", GetSemanticAttribute(listView, "tabindex"), "A composite listbox container must not be a tab stop (tabindex must not be \"0\"); the roving stop lives on the active item.");
 		}
 
+		[TestMethod]
+		[RunsOnUIThread]
+		[PlatformCondition(ConditionMode.Include, RuntimeTestPlatforms.SkiaWasm)]
+		public async Task When_Virtualized_Item_Contains_Action_Then_Action_Is_Exposed_And_Invokable()
+		{
+			Button action = null;
+			var invocationCount = 0;
+			var listView = new ListView
+			{
+				Width = 320,
+				Height = 240,
+				ItemsSource = new[] { new object() },
+				ItemTemplate = new DataTemplate(() =>
+				{
+					action = new Button { Content = "Open details" };
+					action.Click += (_, _) => invocationCount++;
+					return new StackPanel
+					{
+						Children =
+						{
+							new TextBlock { Text = "Account 42" },
+							action
+						}
+					};
+				})
+			};
 
+			try
+			{
+				await UITestHelper.Load(listView);
+				await UITestHelper.WaitFor(() => listView.ContainerFromIndex(0) is ListViewItem && action?.IsLoaded == true);
+				var item = (ListViewItem)listView.ContainerFromIndex(0);
 
+				EnableAccessibilityThroughDom();
+				await UITestHelper.WaitFor(() => SemanticElementExists(item), timeoutMS: 5000, message: "Timed out waiting for the virtualized option.");
+				await UITestHelper.WaitFor(() => action is not null && SemanticElementExists(action), timeoutMS: 5000, message: "Timed out waiting for the actionable template descendant.");
 
+				await UITestHelper.WaitFor(
+					() => GetSemanticAttribute(item, "aria-label") == "Account 42",
+					timeoutMS: 5000,
+					message: "The virtualized option did not refresh its name from the realized template.");
+				Assert.AreEqual("button", GetSemanticElementTagName(action!), "The template action must retain button semantics.");
+				Assert.AreNotEqual(
+					GetSemanticElementId(item),
+					InvokeBrowserJs($"(function(){{const e=document.getElementById('{GetSemanticElementId(action!)}');return e?.parentElement?.id||'';}})()"),
+					"An interactive control must not be nested under role=option, whose descendants are flattened by accessibility APIs.");
+
+				InvokeBrowserJs($"(function(){{document.getElementById('{GetSemanticElementId(action!)}')?.click();return 'ok';}})()");
+				await UITestHelper.WaitFor(() => invocationCount == 1, timeoutMS: 5000, message: "The semantic button click did not reach the XAML Button.");
+			}
+			finally
+			{
+				TestServices.WindowHelper.WindowContent = null;
+			}
+		}
+
+		[TestMethod]
+		[RunsOnUIThread]
+		[PlatformCondition(ConditionMode.Include, RuntimeTestPlatforms.SkiaWasm)]
+		public async Task When_Default_Item_Renders_Text_Then_Option_Has_The_Same_Name()
+		{
+			var listView = new ListView
+			{
+				Width = 320,
+				Height = 240,
+				ItemsSource = new[] { new NamedItem("John Doe") }
+			};
+
+			try
+			{
+				await UITestHelper.Load(listView);
+				await UITestHelper.WaitFor(() => listView.ContainerFromIndex(0) is ListViewItem);
+				var item = (ListViewItem)listView.ContainerFromIndex(0);
+
+				EnableAccessibilityThroughDom();
+				await UITestHelper.WaitFor(
+					() => GetSemanticAttribute(item, "aria-label") == "John Doe",
+					timeoutMS: 5000,
+					message: "The default item option did not match its visibly rendered text.");
+			}
+			finally
+			{
+				TestServices.WindowHelper.WindowContent = null;
+			}
+		}
+
+		sealed class NamedItem(string name)
+		{
+			public override string ToString() => name;
+		}
 
 #endif
 

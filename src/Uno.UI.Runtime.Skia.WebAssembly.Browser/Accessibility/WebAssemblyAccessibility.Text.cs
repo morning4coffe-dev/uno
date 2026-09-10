@@ -3,9 +3,15 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices.JavaScript;
+using System.Text;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
+using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
+using Microsoft.UI.Xaml.Media;
 using Uno.Extensions;
+using Uno.UI.Accessibility;
 using Uno.UI.Dispatching;
 
 namespace Uno.UI.Runtime.Skia;
@@ -96,7 +102,7 @@ internal partial class WebAssemblyAccessibility
 
 	private void RefreshVirtualizedAncestorName(UIElement element)
 	{
-		if (!IsAttachedToSemanticRoot(element))
+		if (!IsAttachedToSemanticRoot(element) || IsPeerExcluded(element))
 		{
 			return;
 		}
@@ -104,9 +110,79 @@ internal partial class WebAssemblyAccessibility
 		{
 			if (IsRealizedVirtualizedItem(parent.Visual.Handle))
 			{
-				NativeMethods.UpdateAriaLabel(parent.Visual.Handle, parent.GetOrCreateAutomationPeer()?.GetName() ?? string.Empty);
+				NativeMethods.UpdateAriaLabel(parent.Visual.Handle, GetVirtualizedItemName(parent));
 				ReconcileBodyTextSubtree(parent);
 				return;
+			}
+		}
+	}
+
+	private static string GetVirtualizedItemName(UIElement item)
+	{
+		var name = item.GetOrCreateAutomationPeer()?.GetName();
+		if (string.IsNullOrWhiteSpace(name) && item is FrameworkElement root)
+		{
+			name = TemplateAutomationText.GetName(root);
+			if (string.IsNullOrWhiteSpace(name))
+			{
+				name = GetVisualTreeAutomationText(root);
+			}
+		}
+		if (string.IsNullOrWhiteSpace(name) &&
+			item is ContentControl { Content: not UIElement and not null } contentControl)
+		{
+			var content = contentControl.Content;
+			var contentText = content.ToString();
+			var typeName = content.GetType().ToString();
+			if (!string.IsNullOrWhiteSpace(contentText) &&
+				!string.Equals(contentText, typeName, StringComparison.Ordinal))
+			{
+				name = contentText;
+			}
+		}
+		return name ?? string.Empty;
+	}
+
+	private static string? GetVisualTreeAutomationText(FrameworkElement root)
+	{
+		StringBuilder? text = null;
+		Append(root, true);
+		return text?.ToString();
+
+		void Append(UIElement element, bool isRoot)
+		{
+			if (element.Visibility == Visibility.Collapsed ||
+				(!isRoot && element is ButtonBase or TextBox or RangeBase or Selector) ||
+				(!isRoot && element is Control { IsTabStop: true }))
+			{
+				return;
+			}
+
+			if (AutomationProperties.GetAccessibilityView(element) != AccessibilityView.Raw)
+			{
+				var name = AutomationProperties.GetName(element);
+				if (string.IsNullOrWhiteSpace(name) && element is TextBlock textBlock)
+				{
+					name = textBlock.Text;
+				}
+				if (!string.IsNullOrWhiteSpace(name))
+				{
+					text ??= new StringBuilder();
+					if (text.Length > 0)
+					{
+						text.Append(", ");
+					}
+					text.Append(name);
+					return;
+				}
+			}
+
+			for (var i = 0; i < VisualTreeHelper.GetChildrenCount(element); i++)
+			{
+				if (VisualTreeHelper.GetChild(element, i) is UIElement child)
+				{
+					Append(child, false);
+				}
 			}
 		}
 	}

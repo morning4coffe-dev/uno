@@ -53,6 +53,13 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 
 	protected override void DisposeCore()
 	{
+		_peerChildren.Clear();
+		_peerExcludedRoots.Clear();
+		foreach (var region in _virtualizedRegions)
+		{
+			region.Dispose();
+		}
+		_virtualizedRegions.Clear();
 		_initialGeometrySubscription?.Dispose();
 		_initialGeometrySubscription = null;
 		foreach (var registration in _modalRegistrations.Values.ToArray())
@@ -353,7 +360,7 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 	protected override void OnChildAdded(UIElement parent, UIElement child, int? index)
 	{
 		// Detached templates join the semantic tree when their subtree is attached, not while it is built.
-		if (!_isAccessibilityEnabled || _isCreatingAOM || !IsAttachedToSemanticRoot(child))
+		if (!_isAccessibilityEnabled || _isCreatingAOM || !IsAttachedToSemanticRoot(child) || IsPeerExcluded(child))
 		{
 			return;
 		}
@@ -361,6 +368,11 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 		_onChildAddedDepth++;
 		try
 		{
+			if (_onChildAddedDepth == 1 && QueuePeerChildrenForAncestor(parent, child))
+			{
+				return;
+			}
+			EnsurePeerChildren(child);
 			TrySubscribeScrollSource(child);
 
 			// FR-032/T058: a Collapsed element (and its whole subtree) is not rendered — skip both
@@ -495,6 +507,7 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 			TryUnregisterModalDialog(child);
 			TryUnregisterComboBox(child);
 			TryUnrealizeComboBoxItem(child);
+			ForgetPeerChildren(child);
 
 			// Remove any children of this element first (they may be semantic even if parent isn't)
 			foreach (var childChild in child.GetChildren())
@@ -504,6 +517,9 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 
 			// Only remove from DOM if this element was actually in the semantic tree
 			var childHandle = child.Visual.Handle;
+			_prunedHandles.Remove(childHandle);
+			_pendingItemNameRefresh.Remove(child);
+			_pendingLabelledBy.RemoveAll(item => item.Handle == childHandle);
 			if (_semanticParentMap.TryGetValue(childHandle, out var semanticParent))
 			{
 				if (this.Log().IsEnabled(LogLevel.Trace))
@@ -512,7 +528,6 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 				}
 				RemoveSemanticElement(semanticParent, childHandle);
 				_semanticParentMap.Remove(childHandle);
-				_prunedHandles.Remove(childHandle);
 			}
 		}
 		catch (Exception ex)
@@ -525,12 +540,13 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 		finally
 		{
 			QueueVirtualizedAncestorNameRefresh(parent);
+			QueuePeerChildrenForAncestor(parent);
 		}
 	}
 
 	private void TryRegisterVirtualizedContainer(UIElement element)
 	{
-		if (element is not (ItemsRepeater or ListViewBase))
+		if (element is not (ItemsRepeater or ListViewBase) || IsPeerExcluded(element))
 		{
 			return;
 		}
@@ -672,6 +688,7 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 			_virtualizedRegions.Add(region);
 
 			var itemRole = isGrid ? "row" : "option";
+			var itemNameSubscriptions = new Dictionary<UIElement, long>();
 
 			void OnContentChanging(ListViewBase sender, ContainerContentChangingEventArgs args)
 			{
@@ -679,15 +696,18 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 				{
 					if (!args.InRecycleQueue)
 					{
+						ObserveItemName(itemElement);
 						EmitRealizedItem(region, containerHandle, itemElement, args.ItemIndex, listView.Items.Count, itemRole);
 						RequestRefresh();
 					}
 					else if (args.ItemIndex >= 0)
 					{
+						StopObservingItemName(itemElement);
 						region.OnItemUnrealized(itemElement.Visual.Handle, args.ItemIndex);
 					}
 					else if (region.TryGetIndex(itemElement.Visual.Handle, out var index))
 					{
+						StopObservingItemName(itemElement);
 						region.OnItemUnrealized(itemElement.Visual.Handle, index);
 					}
 				}
@@ -706,6 +726,7 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 					var index = listView.IndexFromContainer(container);
 					if (index >= 0)
 					{
+						ObserveItemName(container);
 						realized.Add(container.Visual.Handle);
 						EmitRealizedItem(region, containerHandle, container, index, totalCount, itemRole);
 					}
@@ -736,6 +757,28 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 				}
 			}
 			void OnItemsChanged(IObservableVector<object> sender, IVectorChangedEventArgs args) => RequestRefresh();
+			void ObserveItemName(UIElement item)
+			{
+				if (!itemNameSubscriptions.ContainsKey(item))
+				{
+					itemNameSubscriptions[item] = item.RegisterPropertyChangedCallback(
+						AutomationProperties.NameProperty,
+						(sender, _) =>
+						{
+							if (sender is UIElement changedItem && region.ContainsRealizedHandle(changedItem.Visual.Handle))
+							{
+								NativeMethods.UpdateAriaLabel(changedItem.Visual.Handle, GetVirtualizedItemName(changedItem));
+							}
+						});
+				}
+			}
+			void StopObservingItemName(UIElement item)
+			{
+				if (itemNameSubscriptions.Remove(item, out var token))
+				{
+					item.UnregisterPropertyChangedCallback(AutomationProperties.NameProperty, token);
+				}
+			}
 			listView.ContainerContentChanging += OnContentChanging;
 			listView.Items.VectorChanged += OnItemsChanged;
 			listView.LayoutUpdated += OnLayoutUpdated;
@@ -744,6 +787,11 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 				listView.ContainerContentChanging -= OnContentChanging;
 				listView.Items.VectorChanged -= OnItemsChanged;
 				listView.LayoutUpdated -= OnLayoutUpdated;
+				foreach (var subscription in itemNameSubscriptions)
+				{
+					subscription.Key.UnregisterPropertyChangedCallback(AutomationProperties.NameProperty, subscription.Value);
+				}
+				itemNameSubscriptions.Clear();
 			});
 			RequestRefresh();
 			Refresh();
@@ -768,7 +816,7 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 		}
 
 		var peer = itemElement.GetOrCreateAutomationPeer();
-		var label = peer?.GetName() ?? string.Empty;
+		var label = GetVirtualizedItemName(itemElement);
 		var offset = GetOffsetRelativeToSemanticParent(itemElement, containerHandle);
 		var selected = itemElement switch
 		{
@@ -783,6 +831,7 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 			offset.X, offset.Y,
 			itemElement.Visual.Size.X, itemElement.Visual.Size.Y,
 			role, label, peer?.IsEnabled() == false, selected);
+		QueueVirtualizedAncestorNameRefresh(itemElement);
 	}
 
 	private void TryUnregisterVirtualizedContainer(UIElement element)
@@ -804,6 +853,10 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 
 	protected override void OnSizeOrOffsetChanged(Visual visual)
 	{
+		if (IsDisposed || visual is ContainerVisual { Owner.Target: UIElement owner } && IsPeerExcluded(owner))
+		{
+			return;
+		}
 		if (IsAccessibilityEnabled && visual is ContainerVisual containerVisual)
 		{
 			// Only use Visual.IsVisible (maps to Visibility.Collapsed) for hidden detection.
@@ -1359,6 +1412,9 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 		// https://wicg.github.io/aom/explainer.html
 		var rootHandle = rootElement.Visual.Handle;
 		_rootElementHandle = rootHandle;
+		_peerChildren.Clear();
+		_peerExcludedRoots.Clear();
+		EnsurePeerChildren(rootElement);
 
 		// Root element is placed directly under uno-semantics-root — use its local offset
 		var rootOffset = rootElement.Visual.GetTotalOffset();
@@ -1436,6 +1492,10 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 	/// </summary>
 	private bool IsSemanticElement(UIElement element)
 	{
+		if (IsPeerExcluded(element))
+		{
+			return false;
+		}
 		// Elements with AccessibilityView="Raw" are excluded from the accessibility tree entirely.
 		// This matches WinUI3 behavior where Raw elements are not exposed to UIA.
 		var accessibilityView = AutomationProperties.GetAccessibilityView(element);
@@ -1697,6 +1757,11 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 	{
 		Debug.Assert(IsAccessibilityEnabled);
 
+		if (IsPeerExcluded(child))
+		{
+			return;
+		}
+		EnsurePeerChildren(child);
 		TrySubscribeScrollSource(child);
 		// Subscribe ComboBoxes encountered during the initial walk, and realize any options
 		// for a dropdown that is already open when accessibility is enabled.
@@ -2102,6 +2167,10 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 	// WASM overrides to unpin virtualized items on focus change.
 	public override void NotifyAutomationEvent(AutomationPeer peer, AutomationEvents eventId)
 	{
+		if (eventId == AutomationEvents.StructureChanged)
+		{
+			QueuePeerChildren(peer);
+		}
 		if (eventId == AutomationEvents.AutomationFocusChanged)
 		{
 			// When focus moves away from a virtualized item, unpin the previously-pinned
@@ -2462,10 +2531,7 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 				break;
 
 			case AutomationEvents.StructureChanged:
-				// Structure changes (children added/removed) require the screen reader to
-				// re-scan the accessible tree. The browser handles this automatically when
-				// DOM nodes are added/removed, so no explicit notification is needed.
-				// This is here for completeness and logging.
+				QueuePeerChildren(peer);
 				if (this.Log().IsEnabled(LogLevel.Trace))
 				{
 					this.Log().Trace($"[A11y] AUTOMATION EVENT: StructureChanged peer={peer.GetType().Name}");
