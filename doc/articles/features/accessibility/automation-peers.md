@@ -68,11 +68,67 @@ Each platform applies its own pruning strategy. For example, WASM prunes structu
 On Win32, UIA `Invoke` requests are queued to the element's dispatcher rather
 than running control callbacks on the COM caller thread. The request returns
 before the action executes, including actions that close their own window.
-Queued requests are discarded if the owning accessibility host is disposed;
-new requests against a disposed host report that the element is unavailable.
-Regression coverage includes `Given_UiaInvokeProviderWrapper` and the
+Each native provider has a revocable lifetime. Removing its owner subtree,
+replacing its canonical peer, or disposing the accessibility host invalidates
+that generation, including peer-only providers sharing an owner. Reattachment
+creates a new generation; it cannot revive old pattern objects or queued
+callbacks. Disabled elements reject mutations with `UIA_E_ELEMENTNOTENABLED`;
+disconnected generations report `UIA_E_ELEMENTNOTAVAILABLE`.
+
+Logical children have a declared-child generation as well as a visual owner.
+`InvalidatePeer` and `StructureChanged` retire exposed peer-only descendants of
+the invalidated declaration, including descendants reached through ancestors
+that have no native provider. This is intentionally conservative: retained
+logical peers also need a new provider generation after their declaration is
+invalidated. A fresh lookup validates every declared edge through the root before
+republishing a retired peer; an ancestor without a native provider is not a
+validation boundary. The parent/source identities are checked again after
+declaration queries. Canonical and virtual descendants both receive a fresh
+generation: a disconnected canonical cache entry is not reusable. Old pattern
+objects never revive. Unrelated visual owners remain available.
+Invalidation follows a weak index of already exposed providers, without calling
+data-backed `GetChildren` methods. Ancestry is captured when a provider is created
+and rechecked before pattern operations. Cleanup collects its affected providers,
+revokes all of them, then disconnects each native provider once.
+
+Win32 `Toggle`, `Value`, `RangeValue`, `SelectionItem`, and `Scroll` operations
+and property reads run on the owner's dispatcher. Unlike `Invoke`, these
+operations remain synchronous so results and peer validation failures reach
+the UIA caller. Properties remain readable when the control is disabled.
+Work that has not started within five seconds times out and cannot access the
+peer when the dispatcher later resumes. Once a synchronous operation starts,
+the caller waits for its result; the timeout does not abandon an in-progress
+mutation. Invoke's side-effect-free preflight retains its five-second timeout,
+and the queued action rechecks both lifetime and enabled state.
+`SelectorItemAutomationPeer.IsSelected` reads the selector's actual selection
+regardless of enabled state; `Select`, `AddToSelection`, and `RemoveFromSelection`
+remain enabled-only actions.
+
+Regression coverage includes `Given_UiaInvokeProviderWrapper`,
+`Given_Win32AccessibilityPatterns` (production provider wiring, worker calls,
+validation errors, and detached/recycled generations), and the
 Skia Win32 `Given_Window.When_Closed_Callback_Clears_Content_Native_Window_Is_Destroyed`
 test, which checks actual HWND removal rather than only logical window visibility.
+The production-wiring tests run in `src\Uno.UI.UnitTests\Uno.UI.UnitTests.Win32.csproj`.
+This Windows-only runner has separate intermediate/output directories, a build
+host check, and an execution-time Windows guard. It calls real
+`UIAutomationCore.UiaDisconnectProvider`; its observer records ordering/counts
+without replacing native cleanup. There are no platform skips that turn an
+unsupported host into a pass. The platform-neutral `Uno.UI.UnitTests.csproj`
+does not reference the Win32 runtime and keeps the linked, managed Invoke/dispatcher
+contract tests.
+
+After restoring the selected graph, build the Windows runner in Release with
+`UnoTargetFrameworkOverride=net10.0` and run its executable with the filter
+`FullyQualifiedName~Given_Win32AccessibilityPatterns|FullyQualifiedName~Given_UiaInvokeProviderWrapper`.
+The executable is under `src\Uno.UI.UnitTests\bin\Win32\AnyCPU\Release\net10.0`.
+The regressions include a realized ListView item, logical-only replacement,
+100,000 declared children without eager enumeration, exact native-disconnect
+ordering/counts, started synchronous operations crossing the response deadline,
+and callbacks that remove content or close the simulated unit-test window.
+Those windows are not real HWNDs: native cleanup calls and managed lifecycle
+assertions do not replace COM-client, real-window teardown, Narrator, or
+physical-input acceptance against the built runtime.
 
 ### Peer-declared child exclusions on Skia WASM
 

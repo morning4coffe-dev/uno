@@ -95,6 +95,7 @@
 		<_AdjustedOutputProjects>$(_AdjustedOutputProjects);Uno.Reference.csproj</_AdjustedOutputProjects>
 
 		<_AdjustedOutputProjects>$(_AdjustedOutputProjects);Uno.UI.Tests.csproj</_AdjustedOutputProjects>
+		<_AdjustedOutputProjects>$(_AdjustedOutputProjects);Uno.UI.UnitTests.Win32.csproj</_AdjustedOutputProjects>
 		<_AdjustedOutputProjects>$(_AdjustedOutputProjects);Uno.UI.Skia.csproj</_AdjustedOutputProjects>
 		<_AdjustedOutputProjects>$(_AdjustedOutputProjects);Uno.UI.Wasm.csproj</_AdjustedOutputProjects>
 		<_AdjustedOutputProjects>$(_AdjustedOutputProjects);Uno.UI.netcoremobile.csproj</_AdjustedOutputProjects>

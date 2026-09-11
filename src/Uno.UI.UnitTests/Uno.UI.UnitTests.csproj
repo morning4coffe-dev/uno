@@ -4,6 +4,7 @@
 		<OutputType>Exe</OutputType>
 		<IsPackable>false</IsPackable>
 		<OutputPath>bin\$(Platform)\$(Configuration)</OutputPath>
+		<OutputPath Condition="'$(UnoWin32AutomationTests)' == 'true'">bin\Win32\$(Platform)\$(Configuration)</OutputPath>
 		<UseUnoXamlParser>true</UseUnoXamlParser>
 		<ImportFrameworkWinFXTargets>false</ImportFrameworkWinFXTargets>
 		<UnoForceHotReloadCodeGen>true</UnoForceHotReloadCodeGen>
@@ -18,6 +19,12 @@
 	</PropertyGroup>
 
 	<Import Project="../targetframework-override.props" />
+
+	<ItemGroup Condition="'$(UnoWin32AutomationTests)' != 'true'">
+		<Compile Remove="Windows_UI_Xaml_Automation\Win32\**\*.cs" />
+		<Compile Include="..\Uno.UI.Runtime.Skia.Win32\Accessibility\UiaInvokeProviderWrapper.cs" Link="Windows_UI_Xaml_Automation\UiaInvokeProviderWrapper.cs" />
+		<Compile Include="..\Uno.UI.Runtime.Skia.Win32\Accessibility\UiaProviderDispatcher.cs" Link="Windows_UI_Xaml_Automation\UiaProviderDispatcher.cs" />
+	</ItemGroup>
 
 	<!--
 	Uncomment to troubleshoot source generation
@@ -113,7 +120,6 @@
 		</Compile>
 		<Compile Include="..\Uno.UI.RuntimeTests\Helpers\SizeAssertion.cs" Link="Extensions\SizeAssertion.cs" />
 		<Compile Include="..\Uno.UI.Runtime.Skia.WebAssembly.Browser\Accessibility\VirtualizedSemanticRegionState.cs" Link="Windows_UI_Xaml_Automation\VirtualizedSemanticRegionState.cs" />
-		<Compile Include="..\Uno.UI.Runtime.Skia.Win32\Accessibility\UiaInvokeProviderWrapper.cs" Link="Windows_UI_Xaml_Automation\UiaInvokeProviderWrapper.cs" />
 		<Compile Include="..\Uno.UI.RuntimeTests\Tests\Windows_UI_Xaml_Controls\Given_ListViewBase_Items.cs" Link="Windows_UI_XAML_Controls\ListViewBaseTests\Given_ListViewBase_Items.cs" />
 		<Compile Include="..\Uno.UI.RuntimeTests\Tests\Windows_UI_Xaml_Controls\GroupingObservableCollection.cs" Link="Windows_UI_XAML_Controls\ListViewBaseTests\GroupingObservableCollection.cs" />
 		<Compile Include="..\SourceGenerators\Uno.UI.Tasks\ResourceConverters\AndroidResourceConverter.cs">
@@ -137,6 +143,7 @@
 		<ProjectReference Include="..\Uno.Foundation\Uno.Foundation.Skia.csproj" />
 		<ProjectReference Include="..\Uno.UI.Dispatching\Uno.UI.Dispatching.Skia.csproj" />
 		<ProjectReference Include="..\Uno.UI.Composition\Uno.UI.Composition.Skia.csproj" />
+		<ProjectReference Include="..\Uno.UI.Runtime.Skia.Win32\Uno.UI.Runtime.Skia.Win32.csproj" Condition="'$(UnoWin32AutomationTests)' == 'true'" />
 
 		<ProjectReference Include="..\AddIns\Uno.UI.Lottie\Uno.UI.Lottie.Skia.csproj" />
 		<ProjectReference Include="..\SourceGenerators\System.Xaml\Uno.Xaml.csproj" />

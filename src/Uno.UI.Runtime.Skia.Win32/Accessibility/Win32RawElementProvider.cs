@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Threading;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Automation.Peers;
@@ -37,11 +38,20 @@ internal class Win32RawElementProvider :
 	private readonly bool _isVirtualPeer;
 	private readonly Win32Accessibility _accessibility;
 	private readonly WeakReference<AutomationPeer>? _representedPeer;
+	private readonly UiaProviderDispatcher _dispatcher;
+	private readonly List<(WeakReference<AutomationPeer> Peer, bool IsLogical)> _declaredAncestors = new();
+	private bool _hasCyclicAncestry;
+	private int _nativeDisconnected;
 	private IList<AutomationPeer>? _cachedAutomationChildren;
 	private const int MaxHitTestDepth = 1024;
 
 	internal UIElement Owner => _owner;
 	internal AutomationPeer? RepresentedPeer => _representedPeer is not null && _representedPeer.TryGetTarget(out var peer) ? peer : null;
+	internal IReadOnlyList<(WeakReference<AutomationPeer> Peer, bool IsLogical)> DeclaredAncestors => _declaredAncestors;
+	internal bool IsVirtualPeer => _isVirtualPeer;
+	internal bool IsConnected => _dispatcher.IsConnected;
+	internal bool IsRetiredLogicalChild { get; private set; }
+	internal bool HasNativeDisconnectStarted => Volatile.Read(ref _nativeDisconnected) != 0;
 
 	internal Win32RawElementProvider(
 		UIElement owner,
@@ -58,6 +68,90 @@ internal class Win32RawElementProvider :
 		_accessibility = accessibility;
 		_representedPeer = representedPeer is not null ? new WeakReference<AutomationPeer>(representedPeer) : null;
 		_runtimeId = _nextRuntimeId++;
+		_dispatcher = new UiaProviderDispatcher(owner.DispatcherQueue,
+			() => accessibility.IsAccessibilityEnabled && HasCurrentPeer,
+			() => GetAutomationPeer()?.IsEnabled() ?? true);
+		CaptureDeclaredAncestors();
+	}
+
+	internal bool HasCurrentPeer => HasCurrentOwner && HasCurrentAncestry();
+
+	internal bool HasCurrentOwner => _dispatcher.IsConnected &&
+		(RepresentedPeer is { } peer
+			? peer.TryGetProviderOwner(out var owner) && ReferenceEquals(owner, _owner)
+				&& (_isVirtualPeer || ReferenceEquals(peer, _owner.GetOrCreateAutomationPeer()?.ResolveProviderPeer(resolveEventsSource: true) ?? peer))
+			: _representedPeer is null);
+
+	private void CaptureDeclaredAncestors()
+	{
+		if (RepresentedPeer is not { } peer || peer.GetParent() is null)
+		{
+			return;
+		}
+		var visited = new HashSet<AutomationPeer>(ReferenceEqualityComparer.Instance) { peer };
+		var parent = peer.GetParent()?.ResolveProviderPeer(resolveEventsSource: true);
+		while (parent is not null)
+		{
+			if (!visited.Add(parent))
+			{
+				_hasCyclicAncestry = true;
+				if (this.Log().IsEnabled(LogLevel.Warning))
+				{
+					this.Log().Warn("The automation provider has a cyclic declared parent chain.");
+				}
+				break;
+			}
+			_declaredAncestors.Add((new WeakReference<AutomationPeer>(parent), _accessibility.IsLogicalPeer(parent)));
+			parent = parent.GetParent()?.ResolveProviderPeer(resolveEventsSource: true);
+		}
+	}
+
+	private bool HasCurrentAncestry()
+	{
+		if (_hasCyclicAncestry)
+		{
+			return false;
+		}
+		var current = RepresentedPeer?.GetParent()?.ResolveProviderPeer(resolveEventsSource: true);
+		foreach (var ancestor in _declaredAncestors)
+		{
+			if (!ancestor.Peer.TryGetTarget(out var expected) || !ReferenceEquals(current, expected)
+				|| !_accessibility.IsMaterializedPeerCurrent(expected))
+			{
+				return false;
+			}
+			current = expected.GetParent()?.ResolveProviderPeer(resolveEventsSource: true);
+		}
+		return current is null;
+	}
+
+	internal bool DependsOnLogicalDeclaration(AutomationPeer peer)
+	{
+		if (_isVirtualPeer)
+		{
+			return true;
+		}
+		foreach (var ancestor in _declaredAncestors)
+		{
+			if (ancestor.IsLogical)
+			{
+				return true;
+			}
+			if (ancestor.Peer.TryGetTarget(out var parent) && ReferenceEquals(peer, parent))
+			{
+				break;
+			}
+		}
+		return false;
+	}
+
+	internal void RetireLogicalChild() => IsRetiredLogicalChild = true;
+	internal bool TryBeginNativeDisconnect() => Interlocked.Exchange(ref _nativeDisconnected, 1) == 0;
+
+	internal void Disconnect()
+	{
+		_dispatcher.Disconnect();
+		ClearChildrenCache();
 	}
 
 	internal bool RepresentsPeer(AutomationPeer peer)
@@ -68,136 +162,127 @@ internal class Win32RawElementProvider :
 	public ProviderOptions ProviderOptions =>
 		ProviderOptions.ServerSideProvider | ProviderOptions.UseComThreading;
 
-	public object? GetPatternProvider(int patternId)
+	public object? GetPatternProvider(int patternId) => _dispatcher.Run(() => GetPatternProviderCore(patternId));
+
+	private object? GetPatternProviderCore(int patternId)
 	{
-		try
+		var peer = GetAutomationPeer();
+		if (peer is null)
 		{
-			var peer = GetAutomationPeer();
-			if (peer is null)
-			{
-				return null;
-			}
-
-			object? result = patternId switch
-			{
-				Win32UIAutomationInterop.UIA_InvokePatternId
-					when peer.GetPattern(PatternInterface.Invoke) is IInvokeProvider invoke
-					=> new UiaInvokeProviderWrapper(invoke, _owner.DispatcherQueue, () => _accessibility.IsAccessibilityEnabled, peer.IsEnabled),
-				Win32UIAutomationInterop.UIA_TogglePatternId
-					when peer.GetPattern(PatternInterface.Toggle) is IToggleProvider toggle
-					=> new UiaToggleProviderWrapper(toggle),
-				Win32UIAutomationInterop.UIA_ValuePatternId
-					when peer.GetPattern(PatternInterface.Value) is IValueProvider value
-					=> new UiaValueProviderWrapper(value),
-				Win32UIAutomationInterop.UIA_RangeValuePatternId
-					when peer.GetPattern(PatternInterface.RangeValue) is IRangeValueProvider rangeValue
-					=> new UiaRangeValueProviderWrapper(rangeValue),
-				Win32UIAutomationInterop.UIA_ExpandCollapsePatternId
-					when peer.GetPattern(PatternInterface.ExpandCollapse) is IExpandCollapseProvider expandCollapse
-					=> new UiaExpandCollapseProviderWrapper(expandCollapse),
-				Win32UIAutomationInterop.UIA_SelectionPatternId
-					when peer.GetPattern(PatternInterface.Selection) is Microsoft.UI.Xaml.Automation.Provider.ISelectionProvider selection
-					=> new UiaSelectionProviderWrapper(selection, _accessibility),
-				Win32UIAutomationInterop.UIA_SelectionItemPatternId
-					when peer.GetPattern(PatternInterface.SelectionItem) is ISelectionItemProvider selectionItem
-					=> new UiaSelectionItemProviderWrapper(selectionItem, _accessibility),
-				Win32UIAutomationInterop.UIA_ScrollPatternId
-					when peer.GetPattern(PatternInterface.Scroll) is IScrollProvider scroll
-					=> new UiaScrollProviderWrapper(scroll),
-				Win32UIAutomationInterop.UIA_ScrollItemPatternId
-					when peer.GetPattern(PatternInterface.ScrollItem) is IScrollItemProvider scrollItem
-					=> new UiaScrollItemProviderWrapper(scrollItem),
-				Win32UIAutomationInterop.UIA_GridPatternId
-					when peer.GetPattern(PatternInterface.Grid) is IGridProvider grid
-					=> new UiaGridProviderWrapper(grid, _accessibility),
-				Win32UIAutomationInterop.UIA_GridItemPatternId
-					when peer.GetPattern(PatternInterface.GridItem) is IGridItemProvider gridItem
-					=> new UiaGridItemProviderWrapper(gridItem, _accessibility),
-				Win32UIAutomationInterop.UIA_TablePatternId
-					when peer.GetPattern(PatternInterface.Table) is ITableProvider table
-					=> new UiaTableProviderWrapper(table, _accessibility),
-				Win32UIAutomationInterop.UIA_WindowPatternId
-					when peer.GetPattern(PatternInterface.Window) is IWindowProvider window
-					=> new UiaWindowProviderWrapper(window),
-				Win32UIAutomationInterop.UIA_TransformPatternId
-					when peer.GetPattern(PatternInterface.Transform) is ITransformProvider transform
-					=> new UiaTransformProviderWrapper(transform),
-				Win32UIAutomationInterop.UIA_DockPatternId
-					when peer.GetPattern(PatternInterface.Dock) is IDockProvider dock
-					=> new UiaDockProviderWrapper(dock),
-				Win32UIAutomationInterop.UIA_MultipleViewPatternId
-					when peer.GetPattern(PatternInterface.MultipleView) is IMultipleViewProvider multiView
-					=> new UiaMultipleViewProviderWrapper(multiView),
-				Win32UIAutomationInterop.UIA_TextPatternId
-					when peer.GetPattern(PatternInterface.Text) is ITextProvider text
-					=> new UiaTextProviderWrapper(text, _accessibility),
-				Win32UIAutomationInterop.UIA_TextPattern2Id
-					when peer.GetPattern(PatternInterface.Text2) is ITextProvider2 text2
-					=> new UiaTextProvider2Wrapper(text2, _accessibility),
-				Win32UIAutomationInterop.UIA_TextEditPatternId
-					when peer.GetPattern(PatternInterface.TextEdit) is ITextEditProvider textEdit
-					=> new UiaTextEditProviderWrapper(textEdit, _accessibility),
-				Win32UIAutomationInterop.UIA_ItemContainerPatternId
-					when peer.GetPattern(PatternInterface.ItemContainer) is IItemContainerProvider itemContainer
-					=> new UiaItemContainerProviderWrapper(itemContainer, _accessibility),
-				Win32UIAutomationInterop.UIA_VirtualizedItemPatternId
-					when peer.GetPattern(PatternInterface.VirtualizedItem) is IVirtualizedItemProvider virtualizedItem
-					=> new UiaVirtualizedItemProviderWrapper(virtualizedItem),
-				Win32UIAutomationInterop.UIA_TableItemPatternId
-					when peer.GetPattern(PatternInterface.TableItem) is ITableItemProvider tableItem
-					=> new UiaTableItemProviderWrapper(tableItem, _accessibility),
-				Win32UIAutomationInterop.UIA_TextChildPatternId
-					when peer.GetPattern(PatternInterface.TextChild) is ITextChildProvider textChild
-					=> new UiaTextChildProviderWrapper(textChild, _accessibility),
-				Win32UIAutomationInterop.UIA_AnnotationPatternId
-					when peer.GetPattern(PatternInterface.Annotation) is IAnnotationProvider annotation
-					=> new UiaAnnotationProviderWrapper(annotation, _accessibility),
-				Win32UIAutomationInterop.UIA_DragPatternId
-					when peer.GetPattern(PatternInterface.Drag) is IDragProvider drag
-					=> new UiaDragProviderWrapper(drag, _accessibility),
-				Win32UIAutomationInterop.UIA_DropTargetPatternId
-					when peer.GetPattern(PatternInterface.DropTarget) is IDropTargetProvider dropTarget
-					=> new UiaDropTargetProviderWrapper(dropTarget),
-				Win32UIAutomationInterop.UIA_ObjectModelPatternId
-					when peer.GetPattern(PatternInterface.ObjectModel) is IObjectModelProvider objectModel
-					=> new UiaObjectModelProviderWrapper(objectModel),
-				Win32UIAutomationInterop.UIA_SpreadsheetPatternId
-					when peer.GetPattern(PatternInterface.Spreadsheet) is ISpreadsheetProvider spreadsheet
-					=> new UiaSpreadsheetProviderWrapper(spreadsheet, _accessibility),
-				Win32UIAutomationInterop.UIA_SpreadsheetItemPatternId
-					when peer.GetPattern(PatternInterface.SpreadsheetItem) is ISpreadsheetItemProvider spreadsheetItem
-					=> new UiaSpreadsheetItemProviderWrapper(spreadsheetItem, _accessibility),
-				Win32UIAutomationInterop.UIA_StylesPatternId
-					when peer.GetPattern(PatternInterface.Styles) is IStylesProvider styles
-					=> new UiaStylesProviderWrapper(styles),
-				Win32UIAutomationInterop.UIA_SynchronizedInputPatternId
-					when peer.GetPattern(PatternInterface.SynchronizedInput) is ISynchronizedInputProvider synchronizedInput
-					=> new UiaSynchronizedInputProviderWrapper(synchronizedInput),
-				Win32UIAutomationInterop.UIA_CustomNavigationPatternId
-					when peer.GetPattern(PatternInterface.CustomNavigation) is ICustomNavigationProvider customNavigation
-					=> new UiaCustomNavigationProviderWrapper(customNavigation, _accessibility),
-				Win32UIAutomationInterop.UIA_TransformPattern2Id
-					when peer.GetPattern(PatternInterface.Transform2) is ITransformProvider2 transform2
-					=> new UiaTransformProvider2Wrapper(transform2),
-				_ => null,
-			};
-
-			if (this.Log().IsEnabled(LogLevel.Trace))
-			{
-				var patternName = GetPatternName(patternId);
-				this.Log().Trace($"[UIA] GetPatternProvider({patternName}) on {DescribeElement()} → {(result is not null ? result.GetType().Name : "(null)")}");
-			}
-
-			return result;
-		}
-		catch (Exception ex)
-		{
-			if (this.Log().IsEnabled(LogLevel.Debug))
-			{
-				this.Log().Debug($"GetPatternProvider({patternId}) failed: {ex.Message}");
-			}
 			return null;
 		}
+
+		object? result = patternId switch
+		{
+			Win32UIAutomationInterop.UIA_InvokePatternId
+				when peer.GetPattern(PatternInterface.Invoke) is IInvokeProvider invoke
+				=> new UiaInvokeProviderWrapper(invoke, _dispatcher),
+			Win32UIAutomationInterop.UIA_TogglePatternId
+				when peer.GetPattern(PatternInterface.Toggle) is IToggleProvider toggle
+				=> new UiaToggleProviderWrapper(toggle, _dispatcher),
+			Win32UIAutomationInterop.UIA_ValuePatternId
+				when peer.GetPattern(PatternInterface.Value) is IValueProvider value
+				=> new UiaValueProviderWrapper(value, _dispatcher),
+			Win32UIAutomationInterop.UIA_RangeValuePatternId
+				when peer.GetPattern(PatternInterface.RangeValue) is IRangeValueProvider rangeValue
+				=> new UiaRangeValueProviderWrapper(rangeValue, _dispatcher),
+			Win32UIAutomationInterop.UIA_ExpandCollapsePatternId
+				when peer.GetPattern(PatternInterface.ExpandCollapse) is IExpandCollapseProvider expandCollapse
+				=> new UiaExpandCollapseProviderWrapper(expandCollapse),
+			Win32UIAutomationInterop.UIA_SelectionPatternId
+				when peer.GetPattern(PatternInterface.Selection) is Microsoft.UI.Xaml.Automation.Provider.ISelectionProvider selection
+				=> new UiaSelectionProviderWrapper(selection, _accessibility),
+			Win32UIAutomationInterop.UIA_SelectionItemPatternId
+				when peer.GetPattern(PatternInterface.SelectionItem) is ISelectionItemProvider selectionItem
+				=> new UiaSelectionItemProviderWrapper(selectionItem, _accessibility, _dispatcher),
+			Win32UIAutomationInterop.UIA_ScrollPatternId
+				when peer.GetPattern(PatternInterface.Scroll) is IScrollProvider scroll
+				=> new UiaScrollProviderWrapper(scroll, _dispatcher),
+			Win32UIAutomationInterop.UIA_ScrollItemPatternId
+				when peer.GetPattern(PatternInterface.ScrollItem) is IScrollItemProvider scrollItem
+				=> new UiaScrollItemProviderWrapper(scrollItem),
+			Win32UIAutomationInterop.UIA_GridPatternId
+				when peer.GetPattern(PatternInterface.Grid) is IGridProvider grid
+				=> new UiaGridProviderWrapper(grid, _accessibility),
+			Win32UIAutomationInterop.UIA_GridItemPatternId
+				when peer.GetPattern(PatternInterface.GridItem) is IGridItemProvider gridItem
+				=> new UiaGridItemProviderWrapper(gridItem, _accessibility),
+			Win32UIAutomationInterop.UIA_TablePatternId
+				when peer.GetPattern(PatternInterface.Table) is ITableProvider table
+				=> new UiaTableProviderWrapper(table, _accessibility),
+			Win32UIAutomationInterop.UIA_WindowPatternId
+				when peer.GetPattern(PatternInterface.Window) is IWindowProvider window
+				=> new UiaWindowProviderWrapper(window),
+			Win32UIAutomationInterop.UIA_TransformPatternId
+				when peer.GetPattern(PatternInterface.Transform) is ITransformProvider transform
+				=> new UiaTransformProviderWrapper(transform),
+			Win32UIAutomationInterop.UIA_DockPatternId
+				when peer.GetPattern(PatternInterface.Dock) is IDockProvider dock
+				=> new UiaDockProviderWrapper(dock),
+			Win32UIAutomationInterop.UIA_MultipleViewPatternId
+				when peer.GetPattern(PatternInterface.MultipleView) is IMultipleViewProvider multiView
+				=> new UiaMultipleViewProviderWrapper(multiView),
+			Win32UIAutomationInterop.UIA_TextPatternId
+				when peer.GetPattern(PatternInterface.Text) is ITextProvider text
+				=> new UiaTextProviderWrapper(text, _accessibility),
+			Win32UIAutomationInterop.UIA_TextPattern2Id
+				when peer.GetPattern(PatternInterface.Text2) is ITextProvider2 text2
+				=> new UiaTextProvider2Wrapper(text2, _accessibility),
+			Win32UIAutomationInterop.UIA_TextEditPatternId
+				when peer.GetPattern(PatternInterface.TextEdit) is ITextEditProvider textEdit
+				=> new UiaTextEditProviderWrapper(textEdit, _accessibility),
+			Win32UIAutomationInterop.UIA_ItemContainerPatternId
+				when peer.GetPattern(PatternInterface.ItemContainer) is IItemContainerProvider itemContainer
+				=> new UiaItemContainerProviderWrapper(itemContainer, _accessibility),
+			Win32UIAutomationInterop.UIA_VirtualizedItemPatternId
+				when peer.GetPattern(PatternInterface.VirtualizedItem) is IVirtualizedItemProvider virtualizedItem
+				=> new UiaVirtualizedItemProviderWrapper(virtualizedItem),
+			Win32UIAutomationInterop.UIA_TableItemPatternId
+				when peer.GetPattern(PatternInterface.TableItem) is ITableItemProvider tableItem
+				=> new UiaTableItemProviderWrapper(tableItem, _accessibility),
+			Win32UIAutomationInterop.UIA_TextChildPatternId
+				when peer.GetPattern(PatternInterface.TextChild) is ITextChildProvider textChild
+				=> new UiaTextChildProviderWrapper(textChild, _accessibility),
+			Win32UIAutomationInterop.UIA_AnnotationPatternId
+				when peer.GetPattern(PatternInterface.Annotation) is IAnnotationProvider annotation
+				=> new UiaAnnotationProviderWrapper(annotation, _accessibility),
+			Win32UIAutomationInterop.UIA_DragPatternId
+				when peer.GetPattern(PatternInterface.Drag) is IDragProvider drag
+				=> new UiaDragProviderWrapper(drag, _accessibility),
+			Win32UIAutomationInterop.UIA_DropTargetPatternId
+				when peer.GetPattern(PatternInterface.DropTarget) is IDropTargetProvider dropTarget
+				=> new UiaDropTargetProviderWrapper(dropTarget),
+			Win32UIAutomationInterop.UIA_ObjectModelPatternId
+				when peer.GetPattern(PatternInterface.ObjectModel) is IObjectModelProvider objectModel
+				=> new UiaObjectModelProviderWrapper(objectModel),
+			Win32UIAutomationInterop.UIA_SpreadsheetPatternId
+				when peer.GetPattern(PatternInterface.Spreadsheet) is ISpreadsheetProvider spreadsheet
+				=> new UiaSpreadsheetProviderWrapper(spreadsheet, _accessibility),
+			Win32UIAutomationInterop.UIA_SpreadsheetItemPatternId
+				when peer.GetPattern(PatternInterface.SpreadsheetItem) is ISpreadsheetItemProvider spreadsheetItem
+				=> new UiaSpreadsheetItemProviderWrapper(spreadsheetItem, _accessibility),
+			Win32UIAutomationInterop.UIA_StylesPatternId
+				when peer.GetPattern(PatternInterface.Styles) is IStylesProvider styles
+				=> new UiaStylesProviderWrapper(styles),
+			Win32UIAutomationInterop.UIA_SynchronizedInputPatternId
+				when peer.GetPattern(PatternInterface.SynchronizedInput) is ISynchronizedInputProvider synchronizedInput
+				=> new UiaSynchronizedInputProviderWrapper(synchronizedInput),
+			Win32UIAutomationInterop.UIA_CustomNavigationPatternId
+				when peer.GetPattern(PatternInterface.CustomNavigation) is ICustomNavigationProvider customNavigation
+				=> new UiaCustomNavigationProviderWrapper(customNavigation, _accessibility),
+			Win32UIAutomationInterop.UIA_TransformPattern2Id
+				when peer.GetPattern(PatternInterface.Transform2) is ITransformProvider2 transform2
+				=> new UiaTransformProvider2Wrapper(transform2),
+			_ => null,
+		};
+
+		if (this.Log().IsEnabled(LogLevel.Trace))
+		{
+			var patternName = GetPatternName(patternId);
+			this.Log().Trace($"[UIA] GetPatternProvider({patternName}) on {DescribeElement()} → {(result is not null ? result.GetType().Name : "(null)")}");
+		}
+
+		return result;
 	}
 
 	public object? GetPropertyValue(int propertyId)
@@ -615,52 +700,11 @@ internal class Win32RawElementProvider :
 	/// filtered/flattened list. Otherwise we walk the visual tree to collect peers,
 	/// mimicking <see cref="FrameworkElementAutomationPeer.GetChildrenCore"/>.
 	/// </summary>
-	internal void InvalidateChildrenCache() => InvalidateChildrenCache(null);
+	internal void InvalidateChildrenCache() => _accessibility.InvalidateChildren(this);
 
-	/// <summary>
-	/// Clears this provider's cached automation children and cascades the
-	/// invalidation through the UIA child links we previously built.
-	/// </summary>
-	/// <remarks>
-	/// Cascading is required for correctness, not just hygiene. Structure-change
-	/// signals only reach providers that are registered by <see cref="UIElement"/>
-	/// in <see cref="Win32Accessibility"/>'s element table (resolved by walking the
-	/// visual tree). "Virtual" peers — e.g. WCT DataGrid's
-	/// <c>DataGridItemAutomationPeer</c>, whose owner is the DataGrid itself and
-	/// whose children are computed live from the currently-displayed row — are
-	/// keyed only by peer, so the visual-tree walk can never reach them. Without
-	/// the cascade their cached children survive a data refresh and the row keeps
-	/// reporting the now-detached (empty) cell peers. By following the cached child
-	/// peers to their providers we drop the whole stale subtree, so the next UIA
-	/// query re-invokes <c>GetChildren()</c> and rebuilds it from current state.
-	/// </remarks>
-	private void InvalidateChildrenCache(HashSet<Win32RawElementProvider>? visited)
-	{
-		var children = _cachedAutomationChildren;
-		_cachedAutomationChildren = null;
+	internal void ClearChildrenCache() => _cachedAutomationChildren = null;
 
-		if (children is null || children.Count == 0)
-		{
-			return;
-		}
-
-		visited ??= new HashSet<Win32RawElementProvider>(ReferenceEqualityComparer.Instance);
-		if (!visited.Add(this))
-		{
-			return;
-		}
-
-		for (var i = 0; i < children.Count; i++)
-		{
-			var childProvider = _accessibility.TryGetExistingProviderForPeer(children[i]);
-			if (childProvider is not null && !ReferenceEquals(childProvider, this))
-			{
-				childProvider.InvalidateChildrenCache(visited);
-			}
-		}
-	}
-
-	private IList<AutomationPeer>? GetAutomationChildren()
+	internal IList<AutomationPeer>? GetAutomationChildren()
 	{
 		if (_cachedAutomationChildren is not null)
 		{

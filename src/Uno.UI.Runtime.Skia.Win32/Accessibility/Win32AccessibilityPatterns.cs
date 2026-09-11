@@ -257,33 +257,48 @@ internal interface IUiaTextEditProvider // : IUiaTextProvider — flattened for 
 internal sealed class UiaToggleProviderWrapper : IUiaToggleProvider
 {
 	private readonly IToggleProvider _inner;
-	internal UiaToggleProviderWrapper(IToggleProvider inner) => _inner = inner;
-	public void Toggle() => _inner.Toggle();
-	public ToggleState ToggleState => _inner.ToggleState;
+	private readonly UiaProviderDispatcher _dispatcher;
+	internal UiaToggleProviderWrapper(IToggleProvider inner, UiaProviderDispatcher dispatcher)
+	{
+		_inner = inner;
+		_dispatcher = dispatcher;
+	}
+	public void Toggle() => _dispatcher.Run(_inner.Toggle, requiresEnabled: true);
+	public ToggleState ToggleState => _dispatcher.Run(() => _inner.ToggleState);
 }
 
 [ComVisible(true)]
 internal sealed class UiaValueProviderWrapper : IUiaValueProvider
 {
 	private readonly IValueProvider _inner;
-	internal UiaValueProviderWrapper(IValueProvider inner) => _inner = inner;
-	public void SetValue(string val) => _inner.SetValue(val);
-	public string Value => _inner.Value ?? string.Empty;
-	public bool IsReadOnly => _inner.IsReadOnly;
+	private readonly UiaProviderDispatcher _dispatcher;
+	internal UiaValueProviderWrapper(IValueProvider inner, UiaProviderDispatcher dispatcher)
+	{
+		_inner = inner;
+		_dispatcher = dispatcher;
+	}
+	public void SetValue(string val) => _dispatcher.Run(() => _inner.SetValue(val), requiresEnabled: true);
+	public string Value => _dispatcher.Run(() => _inner.Value ?? string.Empty);
+	public bool IsReadOnly => _dispatcher.Run(() => _inner.IsReadOnly);
 }
 
 [ComVisible(true)]
 internal sealed class UiaRangeValueProviderWrapper : IUiaRangeValueProvider
 {
 	private readonly IRangeValueProvider _inner;
-	internal UiaRangeValueProviderWrapper(IRangeValueProvider inner) => _inner = inner;
-	public void SetValue(double val) => _inner.SetValue(val);
-	public double Value => _inner.Value;
-	public bool IsReadOnly => _inner.IsReadOnly;
-	public double Maximum => _inner.Maximum;
-	public double Minimum => _inner.Minimum;
-	public double LargeChange => _inner.LargeChange;
-	public double SmallChange => _inner.SmallChange;
+	private readonly UiaProviderDispatcher _dispatcher;
+	internal UiaRangeValueProviderWrapper(IRangeValueProvider inner, UiaProviderDispatcher dispatcher)
+	{
+		_inner = inner;
+		_dispatcher = dispatcher;
+	}
+	public void SetValue(double val) => _dispatcher.Run(() => _inner.SetValue(val), requiresEnabled: true);
+	public double Value => _dispatcher.Run(() => _inner.Value);
+	public bool IsReadOnly => _dispatcher.Run(() => _inner.IsReadOnly);
+	public double Maximum => _dispatcher.Run(() => _inner.Maximum);
+	public double Minimum => _dispatcher.Run(() => _inner.Minimum);
+	public double LargeChange => _dispatcher.Run(() => _inner.LargeChange);
+	public double SmallChange => _dispatcher.Run(() => _inner.SmallChange);
 }
 
 [ComVisible(true)]
@@ -355,47 +370,52 @@ internal sealed class UiaSelectionItemProviderWrapper : IUiaSelectionItemProvide
 {
 	private readonly ISelectionItemProvider _inner;
 	private readonly Win32Accessibility _accessibility;
+	private readonly UiaProviderDispatcher _dispatcher;
 
 	internal UiaSelectionItemProviderWrapper(
 		ISelectionItemProvider inner,
-		Win32Accessibility accessibility)
+		Win32Accessibility accessibility,
+		UiaProviderDispatcher dispatcher)
 	{
 		_inner = inner;
 		_accessibility = accessibility;
+		_dispatcher = dispatcher;
 	}
 
-	public void Select() => _inner.Select();
-	public void AddToSelection() => _inner.AddToSelection();
-	public void RemoveFromSelection() => _inner.RemoveFromSelection();
-	public bool IsSelected => _inner.IsSelected;
+	public void Select() => _dispatcher.Run(_inner.Select, requiresEnabled: true);
+	public void AddToSelection() => _dispatcher.Run(_inner.AddToSelection, requiresEnabled: true);
+	public void RemoveFromSelection() => _dispatcher.Run(_inner.RemoveFromSelection, requiresEnabled: true);
+	public bool IsSelected => _dispatcher.Run(() => _inner.IsSelected);
 
-	public IRawElementProviderSimple? SelectionContainer
+	public IRawElementProviderSimple? SelectionContainer => _dispatcher.Run<IRawElementProviderSimple?>(() =>
 	{
-		get
+		var container = _inner.SelectionContainer;
+		if (container?.AutomationPeer is { } peer)
 		{
-			var container = _inner.SelectionContainer;
-			if (container?.AutomationPeer is { } peer)
-			{
-				return _accessibility.GetProviderForPeer(peer);
-			}
-			return null;
+			return _accessibility.GetProviderForPeer(peer);
 		}
-	}
+		return null;
+	});
 }
 
 [ComVisible(true)]
 internal sealed class UiaScrollProviderWrapper : IUiaScrollProvider
 {
 	private readonly IScrollProvider _inner;
-	internal UiaScrollProviderWrapper(IScrollProvider inner) => _inner = inner;
-	public void Scroll(ScrollAmount horizontalAmount, ScrollAmount verticalAmount) => _inner.Scroll(horizontalAmount, verticalAmount);
-	public void SetScrollPercent(double horizontalPercent, double verticalPercent) => _inner.SetScrollPercent(horizontalPercent, verticalPercent);
-	public double HorizontalScrollPercent => _inner.HorizontalScrollPercent;
-	public double VerticalScrollPercent => _inner.VerticalScrollPercent;
-	public double HorizontalViewSize => _inner.HorizontalViewSize;
-	public double VerticalViewSize => _inner.VerticalViewSize;
-	public bool HorizontallyScrollable => _inner.HorizontallyScrollable;
-	public bool VerticallyScrollable => _inner.VerticallyScrollable;
+	private readonly UiaProviderDispatcher _dispatcher;
+	internal UiaScrollProviderWrapper(IScrollProvider inner, UiaProviderDispatcher dispatcher)
+	{
+		_inner = inner;
+		_dispatcher = dispatcher;
+	}
+	public void Scroll(ScrollAmount horizontalAmount, ScrollAmount verticalAmount) => _dispatcher.Run(() => _inner.Scroll(horizontalAmount, verticalAmount), requiresEnabled: true);
+	public void SetScrollPercent(double horizontalPercent, double verticalPercent) => _dispatcher.Run(() => _inner.SetScrollPercent(horizontalPercent, verticalPercent), requiresEnabled: true);
+	public double HorizontalScrollPercent => _dispatcher.Run(() => _inner.HorizontalScrollPercent);
+	public double VerticalScrollPercent => _dispatcher.Run(() => _inner.VerticalScrollPercent);
+	public double HorizontalViewSize => _dispatcher.Run(() => _inner.HorizontalViewSize);
+	public double VerticalViewSize => _dispatcher.Run(() => _inner.VerticalViewSize);
+	public bool HorizontallyScrollable => _dispatcher.Run(() => _inner.HorizontallyScrollable);
+	public bool VerticallyScrollable => _dispatcher.Run(() => _inner.VerticallyScrollable);
 }
 
 [ComVisible(true)]

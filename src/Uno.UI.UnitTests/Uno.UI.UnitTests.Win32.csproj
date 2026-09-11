@@ -1,0 +1,10 @@
+<Project>
+	<PropertyGroup>
+		<UnoWin32AutomationTests>true</UnoWin32AutomationTests>
+	</PropertyGroup>
+	<Import Project="Uno.UI.UnitTests.csproj" />
+	<Target Name="RequireWindowsForNativeAutomationTests" BeforeTargets="PrepareForBuild">
+		<Error Condition="!$([MSBuild]::IsOSPlatform('Windows'))"
+			   Text="Uno.UI.UnitTests.Win32 requires Windows and executes native UIAutomationCore cleanup. Use Uno.UI.UnitTests.csproj for platform-neutral tests." />
+	</Target>
+</Project>
