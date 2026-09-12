@@ -16,6 +16,7 @@
 
 		<dependencies>
 			<dependency id="Uno.Foundation" version="1.0.0" />
+			<dependency id="Uno.Diagnostics.Eventing" version="2.0.1" />
 		</dependencies>
 	</metadata>
 	<files>

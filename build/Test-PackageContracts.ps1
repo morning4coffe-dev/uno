@@ -25,6 +25,35 @@ try {
 	if ($code -eq 0 -or ($output -join "`n") -notmatch 'does not match the restored pinned NuGet.CommandLine tool') {
 		throw 'The concrete legacy packer was not rejected for its executable identity.'
 	}
+
+	$prepared = Join-Path $temporary 'prepared-build'
+	$preparedNuspecs = Join-Path $prepared 'nuget'
+	New-Item -ItemType Directory -Path $preparedNuspecs | Out-Null
+	$preparedProject = Join-Path $prepared 'Uno.UI.Build.csproj'
+	Copy-Item -LiteralPath $project -Destination $preparedProject
+	[xml]$buildDefinition = Get-Content -LiteralPath $project -Raw
+	$sourceHashes = @{}
+	foreach ($item in $buildDefinition.SelectNodes("/Project/Target[@Name='PrepareNuGetPackage']/ItemGroup/_NuspecFiles")) {
+		$source = Join-Path $PSScriptRoot $item.Include
+		$sourceHashes[$source] = (Get-FileHash -LiteralPath $source).Hash
+		Copy-Item -LiteralPath $source -Destination (Join-Path $preparedNuspecs ([IO.Path]::GetFileName($source)))
+	}
+	$version = '6.7.0-contract.123'
+	& $DotNetPath msbuild $preparedProject -nologo -target:PrepareNuGetPackage `
+		'-p:CombinedConfiguration=Release|AnyCPU' "-p:NBGV_SemVer2=$version" `
+		'-p:RepositoryUrl=https://github.com/unoplatform/uno' -v:minimal
+	if ($LASTEXITCODE -ne 0) { throw 'Normal isolated package dependency preparation failed.' }
+	$closure = @('msbuild', (Join-Path $PSScriptRoot 'PackageContracts.proj'), '-nologo',
+		'-target:ValidateCorePackageClosure', "-p:CorePackageContractsRoot=$preparedNuspecs\",
+		"-p:ExpectedLoggingVersion=$version", "-p:ExpectedFoundationVersion=$version", '-v:minimal')
+	& $DotNetPath @closure
+	if ($LASTEXITCODE -ne 0) { throw 'Normal preparation lost standalone core package closure or sibling-version stamping.' }
+	foreach ($source in $sourceHashes.Keys) {
+		if ((Get-FileHash -LiteralPath $source).Hash -ne $sourceHashes[$source]) {
+			throw "Package preparation contracts modified owning source: $source"
+		}
+	}
+	Write-Output 'Standalone Foundation/WinRT closure and normal sibling-version preparation passed.'
 	Write-Output 'Pinned/default, identical-copy and legacy-rejection package contracts passed.'
 }
 finally {

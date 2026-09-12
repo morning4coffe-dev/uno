@@ -13,6 +13,9 @@
 		<description>Build Mobile, Desktop and WebAssembly apps with C# and XAML. Today. Open source and professionally supported.</description>
 		<copyright>Copyright (C) 2015-2025 Uno Platform Inc. - all rights reserved</copyright>
 		<repository type="git" url="https://github.com/unoplatform/uno.git" branch="$branch$" commit="$commitid$" />
+		<dependencies>
+			<dependency id="Uno.Foundation.Logging" version="0.0.0" />
+		</dependencies>
 	</metadata>
 	
 	<files>

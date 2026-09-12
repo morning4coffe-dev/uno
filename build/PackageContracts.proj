@@ -1,10 +1,42 @@
 <Project DefaultTargets="Test">
   <Import Project="..\Directory.Build.props" />
   <PropertyGroup>
+    <CorePackageContractsRoot Condition="'$(CorePackageContractsRoot)' == ''">$(MSBuildThisFileDirectory)nuget\</CorePackageContractsRoot>
+    <ExpectedLoggingVersion Condition="'$(ExpectedLoggingVersion)' == ''">0.0.0</ExpectedLoggingVersion>
+    <ExpectedFoundationVersion Condition="'$(ExpectedFoundationVersion)' == ''">1.0.0</ExpectedFoundationVersion>
     <NugetNamespace>
       <Namespace Prefix="n" Uri="http://schemas.microsoft.com/packaging/2010/07/nuspec.xsd" />
     </NugetNamespace>
   </PropertyGroup>
+  <Target Name="ValidateFoundationClosure">
+    <XmlPeek XmlInputPath="$(CorePackageContractsRoot)Uno.Foundation.nuspec"
+             Query="/*[local-name()='package']/*[local-name()='metadata']/*[local-name()='dependencies']/*[local-name()='dependency' and @id='Uno.Foundation.Logging' and @version='$(ExpectedLoggingVersion)']/@id">
+      <Output TaskParameter="Result" ItemName="_FoundationLogging" />
+    </XmlPeek>
+    <Error Condition="'@(_FoundationLogging->Count())' != '1'"
+           Text="Uno.Foundation must own its Logging dependency for every normal target, with the normal sibling-version stamp." />
+  </Target>
+  <Target Name="ValidateWinRTClosure">
+    <XmlPeek XmlInputPath="$(MSBuildThisFileDirectory)..\src\Directory.Build.targets"
+             Query="/Project/ItemGroup/PackageReference[@Update='Uno.Diagnostics.Eventing']/@Version">
+      <Output TaskParameter="Result" PropertyName="_CentralEventingVersion" />
+    </XmlPeek>
+    <Error Condition="'$(_CentralEventingVersion)' == ''"
+           Text="The owning central Eventing version must be available for package closure validation." />
+    <XmlPeek XmlInputPath="$(CorePackageContractsRoot)Uno.WinRT.nuspec"
+             Query="/*[local-name()='package']/*[local-name()='metadata']/*[local-name()='dependencies']/*[local-name()='dependency' and @id='Uno.Foundation' and @version='$(ExpectedFoundationVersion)']/@id">
+      <Output TaskParameter="Result" ItemName="_WinRTFoundation" />
+    </XmlPeek>
+    <XmlPeek XmlInputPath="$(CorePackageContractsRoot)Uno.WinRT.nuspec"
+             Query="/*[local-name()='package']/*[local-name()='metadata']/*[local-name()='dependencies']/*[local-name()='dependency' and @id='Uno.Diagnostics.Eventing' and @version='$(_CentralEventingVersion)']/@id">
+      <Output TaskParameter="Result" ItemName="_WinRTEventing" />
+    </XmlPeek>
+    <Error Condition="'@(_WinRTFoundation->Count())' != '1'"
+           Text="Uno.WinRT must retain its Foundation dependency and transitive Logging closure." />
+    <Error Condition="'@(_WinRTEventing->Count())' != '1'"
+           Text="Uno.WinRT must own Dispatching's Eventing dependency at the central version." />
+  </Target>
+  <Target Name="ValidateCorePackageClosure" DependsOnTargets="ValidateFoundationClosure;ValidateWinRTClosure" />
   <Target Name="ValidateWin32Dependency">
     <XmlPeek XmlInputPath="$(MSBuildThisFileDirectory)..\src\Uno.UI.Runtime.Skia.Win32\Uno.UI.Runtime.Skia.Win32.csproj"
              Query="/Project/ItemGroup/PackageReference[@Include='SkiaSharp' and not(@PrivateAssets)]/@Include">
@@ -57,7 +89,7 @@
     <Error Condition="!$([System.String]::Copy('$(_PackPrerequisites)').StartsWith('ValidateNuGetPacker;'))"
            Text="The selected packer must be checked before package preparation." />
   </Target>
-  <Target Name="Test" DependsOnTargets="ValidateWin32Dependency;ValidateWindowsLogging;ValidateWindowsBuildAssets;ValidateUniqueEntries;ValidatePacker">
+  <Target Name="Test" DependsOnTargets="ValidateCorePackageClosure;ValidateWin32Dependency;ValidateWindowsLogging;ValidateWindowsBuildAssets;ValidateUniqueEntries;ValidatePacker">
     <Message Importance="high" Text="Required platform package dependencies and Windows build assets passed." />
   </Target>
 </Project>
