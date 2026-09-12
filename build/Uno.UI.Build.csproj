@@ -8,7 +8,7 @@
 	<PropertyGroup Condition="'$(BuildingInsideVisualStudio)'==''">
 		<AppVersion>$(NBGV_SemVer2)</AppVersion>
 
-		<NuGetBin>.\external\nuget\NuGet.exe</NuGetBin>
+		<NuGetBin Condition="'$(NuGetBin)' == ''">$(PkgNuGet_CommandLine)\tools\NuGet.exe</NuGetBin>
 		<OutputDir>$(BUILD_ARTIFACTSTAGINGDIRECTORY)</OutputDir>
 		<Configuration>$(CombinedConfiguration.Split('|')[0])</Configuration>
 		<Platform>$(CombinedConfiguration.Split('|')[1])</Platform>
@@ -29,13 +29,14 @@
 	<ItemGroup>
 		<PackageReference Include="MSBuildTasks" Version="1.5.0.235" />
 		<PackageReference Include="NUnit.Runners" Version="3.12.0" />
+		<PackageReference Include="NuGet.CommandLine" Version="7.0.3" GeneratePathProperty="true" PrivateAssets="all" />
 	</ItemGroup>
 
 	<Target Name="UnoVSBuild" AfterTargets="Build" Condition="'$(BuildingInsideVisualStudio)'!=''">
 		<Warning Text="Building this project under Visual Studio has no effect." />
 	</Target>
 
-	<Target Name="PrepareBuildAssets" AfterTargets="Build" Condition="'$(BuildingInsideVisualStudio)'==''">
+	<Target Name="PrepareBuildAssets" AfterTargets="Build" DependsOnTargets="ValidateNuGetPacker" Condition="'$(BuildingInsideVisualStudio)'==''">
 		<Message Text="Building for $(Configuration) and $(Platform) BuildReason:$(BUILD_REASON) Version:$(NBGV_SemVer2)" />
 
 		<CallTarget Targets="UpdateTasksSHA" />
@@ -199,9 +200,28 @@
 
 		<!-- Update Uno.UI.Adapter.Microsoft.Extensions.Logging references version -->
 		<XmlPoke XmlInputPath="%(_NuspecFiles.Identity)" Query="/x:package/x:metadata/x:dependencies//x:dependency[@id='Uno.UI.Adapter.Microsoft.Extensions.Logging']/@version" Value="$(NBGV_SemVer2)" Namespaces="$(NugetNamespace)" />
+		<XmlPoke XmlInputPath="%(_NuspecFiles.Identity)" Query="/x:package/x:metadata/x:repository/@url" Value="$(RepositoryUrl)" Namespaces="$(NugetNamespace)" />
 	</Target>
 
-	<Target Name="BuildNuGetPackage" AfterTargets="Build" DependsOnTargets="PrepareBuildAssets" Condition="'$(BuildingInsideVisualStudio)'=='' and '$(Configuration)'=='Release'">
+	<Target Name="ValidateNuGetPacker">
+		<PropertyGroup>
+			<_PinnedNuGetBin>$(PkgNuGet_CommandLine)\tools\NuGet.exe</_PinnedNuGetBin>
+		</PropertyGroup>
+		<Error Text="The pinned NuGet.CommandLine tool is unavailable. Restore Uno.UI.Build.csproj before packaging."
+		       Condition="!Exists('$(_PinnedNuGetBin)')" />
+		<Error Text="The selected NuGet packer does not exist: $(NuGetBin)"
+		       Condition="!Exists('$(NuGetBin)')" />
+		<GetFileHash Files="$(_PinnedNuGetBin)" Algorithm="SHA256">
+			<Output TaskParameter="Items" ItemName="_PinnedNuGetHash" />
+		</GetFileHash>
+		<GetFileHash Files="$(NuGetBin)" Algorithm="SHA256">
+			<Output TaskParameter="Items" ItemName="_SelectedNuGetHash" />
+		</GetFileHash>
+		<Error Text="The selected NuGet packer does not match the restored pinned NuGet.CommandLine tool."
+		       Condition="'@(_PinnedNuGetHash->'%(FileHash)')' != '@(_SelectedNuGetHash->'%(FileHash)')'" />
+	</Target>
+
+	<Target Name="BuildNuGetPackage" AfterTargets="Build" DependsOnTargets="ValidateNuGetPacker;PrepareBuildAssets" Condition="'$(BuildingInsideVisualStudio)'=='' and '$(Configuration)'=='Release'">
 		<PropertyGroup>
 			<!-- NU5123: Long paths - disabled as tragets in Uno.UI.Runtime.Skia.WebAssembly.Browser\buildTransitive have too long paths -->
 			<NuSpecProperties>NoWarn=NU5100,NU5105,NU5131;NU5123;branch=$(NBGV_BuildingRef);commitid=$(NBGV_GitCommitId)</NuSpecProperties>
@@ -209,23 +229,24 @@
 		</PropertyGroup>
 
 		<!-- Pre-validation of contents to be packed -->
+		<MSBuild Projects="$(MSBuildThisFileDirectory)PackageContracts.proj" Targets="Test" />
 		<Error Text="The Uno.UI.Toolkit PRI file is not present in src\Uno.UI.Toolkit\bin\Uno.UI.Toolkit.Windows\Release"
 					 Condition="!exists('..\src\Uno.UI.Toolkit\bin\Uno.UI.Toolkit.Windows\Release\$(NetUWPOrWinUI)\Uno.UI.Toolkit.pri')" />
 
 		<!-- Create the packages -->
-		<Exec Command="$(NuGetBin) pack nuget\Uno.WinUI.nuspec -Verbosity Detailed -Version &quot;$(NBGV_SemVer2)&quot; -Properties &quot;$(NuSpecProperties)&quot;" />
-		<Exec Command="$(NuGetBin) pack nuget\Uno.Foundation.nuspec -Verbosity Detailed -Version &quot;$(NBGV_SemVer2)&quot; -Properties &quot;$(NuSpecProperties)&quot;" />
-		<Exec Command="$(NuGetBin) pack nuget\Uno.WinRT.nuspec -Verbosity Detailed -Version &quot;$(NBGV_SemVer2)&quot; -Properties &quot;$(NuSpecProperties)&quot;" />
-		<Exec Command="$(NuGetBin) pack nuget\Uno.WinUI.Lottie.nuspec -Verbosity Detailed -Version &quot;$(NBGV_SemVer2)&quot; -Properties &quot;$(NuSpecProperties)&quot;" />
-		<Exec Command="$(NuGetBin) pack nuget\Uno.WinUI.MSAL.nuspec -Verbosity Detailed -Version &quot;$(NBGV_SemVer2)&quot; -Properties &quot;$(NuSpecProperties)&quot;" />
-		<Exec Command="$(NuGetBin) pack nuget\Uno.WinUI.Graphics2DSK.nuspec -Verbosity Detailed -Version &quot;$(NBGV_SemVer2)&quot; -Properties &quot;$(NuSpecProperties)&quot;" />
-		<Exec Command="$(NuGetBin) pack nuget\Uno.WinUI.Svg.nuspec -Verbosity Detailed -Version &quot;$(NBGV_SemVer2)&quot; -Properties &quot;$(NuSpecProperties)&quot;" />
-		<Exec Command="$(NuGetBin) pack nuget\Uno.WinUI.DevServer.nuspec -Verbosity Detailed -Version &quot;$(NBGV_SemVer2)&quot; -Properties &quot;$(NuSpecProperties)&quot;" />
-		<Exec Command="$(NuGetBin) pack nuget\Uno.WinUI.Skia.Linux.FrameBuffer.nuspec -Verbosity Detailed -Version &quot;$(NBGV_SemVer2)&quot; -Properties &quot;$(NuSpecProperties)&quot;" />
-		<Exec Command="$(NuGetBin) pack nuget\Uno.WinUI.Skia.MacOS.nuspec -Verbosity Detailed -Version &quot;$(NBGV_SemVer2)&quot; -Properties &quot;$(NuSpecProperties)&quot;" />
-		<Exec Command="$(NuGetBin) pack nuget\Uno.WinUI.Skia.X11.nuspec -Verbosity Detailed -Version &quot;$(NBGV_SemVer2)&quot; -Properties &quot;$(NuSpecProperties)&quot;" />
-		<Exec Command="$(NuGetBin) pack nuget\Uno.WinUI.XamlHost.nuspec -Verbosity Detailed -Version &quot;$(NBGV_SemVer2)&quot; -Properties &quot;$(NuSpecProperties)&quot;" />
-		<Exec Command="$(NuGetBin) pack nuget\Uno.WinUI.WebAssembly.nuspec -Verbosity Detailed -Version &quot;$(NBGV_SemVer2)&quot; -Properties &quot;$(NuSpecProperties)&quot;" />
+		<Exec Command="&quot;$(NuGetBin)&quot; pack nuget\Uno.WinUI.nuspec -Verbosity Detailed -Version &quot;$(NBGV_SemVer2)&quot; -Properties &quot;$(NuSpecProperties)&quot;" />
+		<Exec Command="&quot;$(NuGetBin)&quot; pack nuget\Uno.Foundation.nuspec -Verbosity Detailed -Version &quot;$(NBGV_SemVer2)&quot; -Properties &quot;$(NuSpecProperties)&quot;" />
+		<Exec Command="&quot;$(NuGetBin)&quot; pack nuget\Uno.WinRT.nuspec -Verbosity Detailed -Version &quot;$(NBGV_SemVer2)&quot; -Properties &quot;$(NuSpecProperties)&quot;" />
+		<Exec Command="&quot;$(NuGetBin)&quot; pack nuget\Uno.WinUI.Lottie.nuspec -Verbosity Detailed -Version &quot;$(NBGV_SemVer2)&quot; -Properties &quot;$(NuSpecProperties)&quot;" />
+		<Exec Command="&quot;$(NuGetBin)&quot; pack nuget\Uno.WinUI.MSAL.nuspec -Verbosity Detailed -Version &quot;$(NBGV_SemVer2)&quot; -Properties &quot;$(NuSpecProperties)&quot;" />
+		<Exec Command="&quot;$(NuGetBin)&quot; pack nuget\Uno.WinUI.Graphics2DSK.nuspec -Verbosity Detailed -Version &quot;$(NBGV_SemVer2)&quot; -Properties &quot;$(NuSpecProperties)&quot;" />
+		<Exec Command="&quot;$(NuGetBin)&quot; pack nuget\Uno.WinUI.Svg.nuspec -Verbosity Detailed -Version &quot;$(NBGV_SemVer2)&quot; -Properties &quot;$(NuSpecProperties)&quot;" />
+		<Exec Command="&quot;$(NuGetBin)&quot; pack nuget\Uno.WinUI.DevServer.nuspec -Verbosity Detailed -Version &quot;$(NBGV_SemVer2)&quot; -Properties &quot;$(NuSpecProperties)&quot;" />
+		<Exec Command="&quot;$(NuGetBin)&quot; pack nuget\Uno.WinUI.Skia.Linux.FrameBuffer.nuspec -Verbosity Detailed -Version &quot;$(NBGV_SemVer2)&quot; -Properties &quot;$(NuSpecProperties)&quot;" />
+		<Exec Command="&quot;$(NuGetBin)&quot; pack nuget\Uno.WinUI.Skia.MacOS.nuspec -Verbosity Detailed -Version &quot;$(NBGV_SemVer2)&quot; -Properties &quot;$(NuSpecProperties)&quot;" />
+		<Exec Command="&quot;$(NuGetBin)&quot; pack nuget\Uno.WinUI.Skia.X11.nuspec -Verbosity Detailed -Version &quot;$(NBGV_SemVer2)&quot; -Properties &quot;$(NuSpecProperties)&quot;" />
+		<Exec Command="&quot;$(NuGetBin)&quot; pack nuget\Uno.WinUI.XamlHost.nuspec -Verbosity Detailed -Version &quot;$(NBGV_SemVer2)&quot; -Properties &quot;$(NuSpecProperties)&quot;" />
+		<Exec Command="&quot;$(NuGetBin)&quot; pack nuget\Uno.WinUI.WebAssembly.nuspec -Verbosity Detailed -Version &quot;$(NBGV_SemVer2)&quot; -Properties &quot;$(NuSpecProperties)&quot;" />
 	</Target>
 
 	<!--

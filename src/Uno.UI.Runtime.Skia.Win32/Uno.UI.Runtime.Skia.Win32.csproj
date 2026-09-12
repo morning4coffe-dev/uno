@@ -28,6 +28,7 @@
 		<PackageReference Include="Microsoft.Web.WebView2" Aliases="mswebview2" PrivateAssets="all" />
 
 		<PackageReference Include="Microsoft.Windows.CsWin32" Version="0.3.106" />
+		<PackageReference Include="SkiaSharp" />
 		<PackageReference Include="HarfBuzzSharp" />
 		<PackageReference Include="Uno.icu-win" />
 	</ItemGroup>

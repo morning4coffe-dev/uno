@@ -1,0 +1,63 @@
+<Project DefaultTargets="Test">
+  <Import Project="..\Directory.Build.props" />
+  <PropertyGroup>
+    <NugetNamespace>
+      <Namespace Prefix="n" Uri="http://schemas.microsoft.com/packaging/2010/07/nuspec.xsd" />
+    </NugetNamespace>
+  </PropertyGroup>
+  <Target Name="ValidateWin32Dependency">
+    <XmlPeek XmlInputPath="$(MSBuildThisFileDirectory)..\src\Uno.UI.Runtime.Skia.Win32\Uno.UI.Runtime.Skia.Win32.csproj"
+             Query="/Project/ItemGroup/PackageReference[@Include='SkiaSharp' and not(@PrivateAssets)]/@Include">
+      <Output TaskParameter="Result" ItemName="_SkiaDependency" />
+    </XmlPeek>
+    <Error Condition="'@(_SkiaDependency->Count())' != '1'" Text="Win32 must declare its required SkiaSharp dependency." />
+  </Target>
+  <Target Name="ValidateWindowsLogging">
+    <XmlPeek XmlInputPath="$(MSBuildThisFileDirectory)nuget\Uno.WinUI.nuspec" Namespaces="$(NugetNamespace)"
+             Query="/n:package/n:metadata/n:dependencies/n:group[contains(@targetFramework, '-windows')]/n:dependency[@id='Uno.Foundation.Logging']/@id">
+      <Output TaskParameter="Result" ItemName="_WindowsLogging" />
+    </XmlPeek>
+    <Error Condition="'@(_WindowsLogging->Count())' != '2'" Text="Both Windows Toolkit groups must declare their Logging dependency." />
+  </Target>
+  <Target Name="ValidateWindowsBuildAssets">
+    <XmlPeek XmlInputPath="$(MSBuildThisFileDirectory)nuget\Uno.WinUI.nuspec" Namespaces="$(NugetNamespace)"
+             Query="/n:package/n:files/n:file[@target='buildTransitive\$(NetCurrentWinAppSDK)']/@src">
+      <Output TaskParameter="Result" ItemName="_WindowsBuildAssets" />
+    </XmlPeek>
+    <Error Condition="'@(_WindowsBuildAssets->Count())' != '2'" Text="Windows build imports must name the supported minimum platform version." />
+  </Target>
+  <Target Name="ValidateUniqueEntries">
+    <XmlPeek XmlInputPath="$(MSBuildThisFileDirectory)nuget\Uno.WinUI.nuspec" Namespaces="$(NugetNamespace)"
+             Query="/n:package/n:files/n:file[@target='lib\$(NetUWPOrWinUI)']/@src">
+      <Output TaskParameter="Result" ItemName="_DuplicatePreviousWindows" />
+    </XmlPeek>
+    <XmlPeek XmlInputPath="$(MSBuildThisFileDirectory)nuget\Uno.WinUI.nuspec" Namespaces="$(NugetNamespace)"
+             Query="/n:package/n:files/n:file[@target='uno-runtime\$(NetPrevious)\webassembly' and @src='..\..\src\SourceGenerators\System.Xaml\bin\Release\netstandard2.0\Uno.Xaml.dll']/@src">
+      <Output TaskParameter="Result" ItemName="_PreviousWasmXaml" />
+    </XmlPeek>
+    <XmlPeek XmlInputPath="$(MSBuildThisFileDirectory)nuget\Uno.WinUI.nuspec" Namespaces="$(NugetNamespace)"
+             Query="/n:package/n:files/n:file[@target='uno-runtime\$(NetCurrent)\webassembly' and @src='..\..\src\SourceGenerators\System.Xaml\bin\Release\netstandard2.0\Uno.Xaml.dll']/@src">
+      <Output TaskParameter="Result" ItemName="_CurrentWasmXaml" />
+    </XmlPeek>
+    <Error Condition="'@(_DuplicatePreviousWindows)' != ''"
+           Text="The parameterized previous Windows group must not be duplicated by a static group." />
+    <Error Condition="'@(_PreviousWasmXaml->Count())' != '1' or '@(_CurrentWasmXaml->Count())' != '1'"
+           Text="Each browser runtime must declare its Xaml assembly exactly once." />
+  </Target>
+  <Target Name="ValidatePacker">
+    <XmlPeek XmlInputPath="$(MSBuildThisFileDirectory)Uno.UI.Build.csproj"
+             Query="/Project/ItemGroup/PackageReference[@Include='NuGet.CommandLine' and @GeneratePathProperty='true']/@Version">
+      <Output TaskParameter="Result" PropertyName="_PackerVersion" />
+    </XmlPeek>
+    <Error Condition="'$(_PackerVersion)' != '7.0.3'" Text="Aggregate packing must use the pinned modern framework-aware NuGet tool." />
+    <XmlPeek XmlInputPath="$(MSBuildThisFileDirectory)Uno.UI.Build.csproj"
+             Query="/Project/Target[@Name='BuildNuGetPackage']/@DependsOnTargets">
+      <Output TaskParameter="Result" PropertyName="_PackPrerequisites" />
+    </XmlPeek>
+    <Error Condition="!$([System.String]::Copy('$(_PackPrerequisites)').StartsWith('ValidateNuGetPacker;'))"
+           Text="The selected packer must be checked before package preparation." />
+  </Target>
+  <Target Name="Test" DependsOnTargets="ValidateWin32Dependency;ValidateWindowsLogging;ValidateWindowsBuildAssets;ValidateUniqueEntries;ValidatePacker">
+    <Message Importance="high" Text="Required platform package dependencies and Windows build assets passed." />
+  </Target>
+</Project>

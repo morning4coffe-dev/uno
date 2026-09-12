@@ -108,6 +108,35 @@ In order to update those reference assemblies, set `<UnoTargetFrameworkOverride>
 
 Refer to the [guidelines for breaking changes](../contributing/guidelines/breaking-changes.md) document.
 
+### Preparing aggregate packages
+
+The aggregate build project restores a pinned `NuGet.CommandLine` tool. Restore
+`build\Uno.UI.Build.csproj` with the selected `CombinedConfiguration` before
+packing; the legacy executable in `build\external` does not correctly classify
+modern .NET framework groups.
+
+Run the package declaration contracts without building platform inputs:
+
+```powershell
+dotnet msbuild build\PackageContracts.proj
+```
+
+After restoring the aggregate build project, run
+`pwsh -NoProfile -File build\Test-PackageContracts.ps1` to verify the actual
+packer selection. A `NuGetBin` override is accepted only when its bytes match
+the restored pinned executable; the legacy tool is rejected before preparation.
+
+Normal preparation stamps task namespaces, sibling dependency versions and the
+selected `RepositoryUrl` into the packing definitions. Run it in an owned
+staging checkout, preserving the clean source revision and a final manifest of
+prepared files, tool identities and package hashes. Use the actual source
+repository URL for fork builds. Preparation is not permission to restamp an
+existing package identity or replace missing platform inputs with other builds.
+
+The contracts guard required Skia/Toolkit dependencies and Windows build-asset
+paths. Complete source inputs, package API checks and real package-only
+consumers remain separate requirements.
+
 ### Updating the Nuget packages used by the Uno.UI solution
 
 The versions used are centralized in the [Directory.Build.targets](https://github.com/unoplatform/uno/blob/master/src/Directory.Build.targets) file, and all the
