@@ -272,6 +272,58 @@ const path = require("node:path");
 			assert.equal(await page.locator("#uno-semantics-904").getAttribute("aria-hidden"), null);
 			assert.equal(await page.evaluate(() => document.activeElement.id), "uno-semantics-904");
 		});
+		for (const [closeParentFirst, sibling] of [[false, false], [false, true], [true, false], [true, true]]) {
+			await test(`nested modal masking restores original attributes (parent closes first: ${closeParentFirst}, sibling: ${sibling})`, async page => {
+				await page.evaluate(sibling => {
+					document.getElementById("uno-semantics-root").innerHTML = `
+						<button id="uno-semantics-1000" tabindex="2">Background</button>
+						<button id="uno-semantics-1001" aria-hidden="true" tabindex="-1">Originally hidden</button>
+						<div id="uno-semantics-1010">
+							<button id="uno-semantics-1011">Parent action</button>
+							<div id="uno-semantics-1020"><button id="uno-semantics-1021">Child action</button></div>
+						</div>`;
+					if (sibling) {
+						document.getElementById("uno-semantics-root").appendChild(document.getElementById("uno-semantics-1020"));
+					}
+					const trap = Uno.UI.Runtime.Skia.FocusTrap;
+					trap.activateFocusTrap(1010, 1000, [1011]);
+					trap.activateFocusTrap(1020, 1011, [1021]);
+				}, sibling);
+				assert.equal(await page.locator("#uno-semantics-1020").getAttribute("aria-hidden"), null,
+					"The active child modal must not inherit its parent's background mask");
+				const first = closeParentFirst ? 1010 : 1020;
+				const last = closeParentFirst ? 1020 : 1010;
+				await page.evaluate(handle => Uno.UI.Runtime.Skia.FocusTrap.deactivateFocusTrap(handle), first);
+				if (closeParentFirst && sibling) {
+					await page.locator("#uno-semantics-1010").evaluate(element => element.remove());
+				}
+				assert.equal(await page.locator("#uno-semantics-1000").getAttribute("aria-hidden"), "true",
+					"An active modal must continue excluding the background");
+				assert.equal(await page.locator("#uno-semantics-1000").getAttribute("tabindex"), "-1");
+				await page.keyboard.press("Tab");
+				assert.equal(await page.evaluate(() => document.activeElement.id),
+					closeParentFirst ? "uno-semantics-1021" : "uno-semantics-1011");
+				await page.keyboard.press("Shift+Tab");
+				assert.equal(await page.evaluate(() => document.activeElement.id),
+					closeParentFirst ? "uno-semantics-1021" : "uno-semantics-1011");
+				await page.evaluate(handle => Uno.UI.Runtime.Skia.FocusTrap.deactivateFocusTrap(handle), last);
+				assert.equal(await page.locator("#uno-semantics-1000").getAttribute("aria-hidden"), null);
+				assert.equal(await page.locator("#uno-semantics-1000").getAttribute("tabindex"), "2");
+				assert.equal(await page.locator("#uno-semantics-1001").getAttribute("aria-hidden"), "true");
+				assert.equal(await page.locator("#uno-semantics-1001").getAttribute("tabindex"), "-1");
+				assert.equal(await page.evaluate(() => Uno.UI.Runtime.Skia.FocusTrap.isFocusTrapActive()), false);
+				assert.equal(await page.evaluate(() => document.activeElement.id), "uno-semantics-1000",
+					"Closing a suspended parent must preserve the surviving scope's return path");
+				await page.evaluate(() => {
+					const trap = Uno.UI.Runtime.Skia.FocusTrap;
+					trap.activateFocusTrap(1020, 1000, [1021]);
+					trap.deactivateFocusTrap(1020);
+				});
+				assert.equal(await page.locator("#uno-semantics-1000").getAttribute("aria-hidden"), null);
+				assert.equal(await page.locator("#uno-semantics-1000").getAttribute("tabindex"), "2");
+				assert.equal(await page.evaluate(() => document.activeElement.id), "uno-semantics-1000");
+			});
+		}
 		await test("late semantic reparenting preserves identity, focus and handlers", async page => {
 			const result = await page.evaluate(() => {
 				const oldParent = document.createElement("div");

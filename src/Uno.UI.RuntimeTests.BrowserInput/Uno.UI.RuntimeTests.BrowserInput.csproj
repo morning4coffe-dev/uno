@@ -1,0 +1,51 @@
+<Project Sdk="Microsoft.NET.Sdk.WebAssembly">
+	<PropertyGroup>
+		<TargetFrameworks>$(NetCurrent)</TargetFrameworks>
+		<OutputType>Exe</OutputType>
+		<UnoRuntimeIdentifier>Skia</UnoRuntimeIdentifier>
+		<IsUnoHead>true</IsUnoHead>
+		<AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+		<PublishTrimmed>false</PublishTrimmed>
+		<WasmShellILLinkerEnabled>false</WasmShellILLinkerEnabled>
+		<WasmIncludeFullIcuData>true</WasmIncludeFullIcuData>
+		<InvariantGlobalization>false</InvariantGlobalization>
+		<WasmBuildNative>true</WasmBuildNative>
+		<WasmShellEnableIDBFS>true</WasmShellEnableIDBFS>
+		<UseSystemResourceKeys>false</UseSystemResourceKeys>
+		<WasmFingerprintAssets>false</WasmFingerprintAssets>
+	</PropertyGroup>
+	<Import Project="../targetframework-override-noplatform.props" />
+	<ItemGroup>
+		<PackageReference Include="SkiaSharp" />
+		<PackageReference Include="SkiaSharp.NativeAssets.WebAssembly" />
+		<PackageReference Include="Uno.Wasm.Bootstrap" />
+		<PackageReference Include="Uno.Fonts.OpenSans" Version="2.4.5" />
+	</ItemGroup>
+	<ItemGroup>
+		<EmbeddedResource Include="WasmScripts\AppManifest.js" />
+	</ItemGroup>
+	<ItemGroup>
+		<ProjectReference Include="..\Uno.Foundation\Uno.Foundation.Wasm.csproj" />
+		<ProjectReference Include="..\Uno.UI.Dispatching\Uno.UI.Dispatching.Wasm.csproj" />
+		<ProjectReference Include="..\Uno.UI.Composition\Uno.UI.Composition.Skia.csproj" />
+		<ProjectReference Include="..\Uno.UWP\Uno.Wasm.csproj" />
+		<ProjectReference Include="..\Uno.UI\Uno.UI.Skia.csproj" />
+		<ProjectReference Include="..\Uno.UI.FluentTheme\Uno.UI.FluentTheme.Skia.csproj" />
+		<ProjectReference Include="..\Uno.UI.Runtime.Skia.WebAssembly.Browser\Uno.UI.Runtime.Skia.WebAssembly.Browser.csproj" />
+		<ProjectReference Include="..\SourceGenerators\Uno.UI.SourceGenerators\Uno.UI.SourceGenerators.csproj"
+						  ReferenceOutputAssembly="false" OutputItemType="Analyzer" />
+	</ItemGroup>
+	<Import Project="..\SourceGenerators\Uno.UI.SourceGenerators\Content\Uno.UI.SourceGenerators.props" />
+	<Import Project="..\Uno.UI.Runtime.Skia.WebAssembly.Browser\build\*.Runtime.Skia.WebAssembly.Browser.props" />
+	<Import Project="..\Uno.UI.Runtime.Skia.WebAssembly.Browser\build\*.Runtime.Skia.WebAssembly.Browser.targets" />
+	<PropertyGroup>
+		<UnoUIMSBuildTasksPath>$(MSBuildThisFileDirectory)..\SourceGenerators\Uno.UI.Tasks\bin\$(Configuration)_Shadow</UnoUIMSBuildTasksPath>
+	</PropertyGroup>
+	<Import Project="..\SourceGenerators\Uno.UI.Tasks\Content\Uno.UI.Tasks.targets" />
+	<Import Project="..\..\build\nuget\uno.winui.runtime-replace.targets" />
+	<Target Name="BuildInputFixtureTasks" BeforeTargets="BeforeBuild;ReplaceUnoRuntime">
+		<MSBuild Projects="..\SourceGenerators\Uno.UI.Tasks\Uno.UI.Tasks.csproj"
+				 Targets="Restore;Build"
+				 Properties="Configuration=$(Configuration);TargetFramework=netstandard2.0;RuntimeIdentifier=" />
+	</Target>
+</Project>

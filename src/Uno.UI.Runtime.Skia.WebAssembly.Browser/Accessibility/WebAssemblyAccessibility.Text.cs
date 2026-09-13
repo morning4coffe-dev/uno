@@ -1,7 +1,6 @@
 #nullable enable
 
 using System;
-using System.Collections.Generic;
 using System.Runtime.InteropServices.JavaScript;
 using System.Text;
 using Microsoft.UI.Xaml;
@@ -18,7 +17,10 @@ namespace Uno.UI.Runtime.Skia;
 
 internal partial class WebAssemblyAccessibility
 {
-	private readonly HashSet<UIElement> _pendingItemNameRefresh = new();
+	private readonly SemanticNameRefreshQueue _pendingNameRefresh;
+	private readonly Action _drainAncestorNameRefresh;
+	private readonly Action<UIElement> _refreshAncestorName;
+	private bool _nameRefreshQueued;
 
 	private bool IsAttachedToSemanticRoot(UIElement element)
 	{
@@ -100,23 +102,6 @@ internal partial class WebAssemblyAccessibility
 		return IntPtr.Zero;
 	}
 
-	private void RefreshVirtualizedAncestorName(UIElement element)
-	{
-		if (!IsAttachedToSemanticRoot(element) || IsPeerExcluded(element))
-		{
-			return;
-		}
-		for (UIElement? parent = element; parent is not null; parent = parent.GetParent() as UIElement)
-		{
-			if (IsRealizedVirtualizedItem(parent.Visual.Handle))
-			{
-				NativeMethods.UpdateAriaLabel(parent.Visual.Handle, GetVirtualizedItemName(parent));
-				ReconcileBodyTextSubtree(parent);
-				return;
-			}
-		}
-	}
-
 	private static string GetVirtualizedItemName(UIElement item)
 	{
 		var name = item.GetOrCreateAutomationPeer()?.GetName();
@@ -187,28 +172,51 @@ internal partial class WebAssemblyAccessibility
 		}
 	}
 
-	private void QueueVirtualizedAncestorNameRefresh(UIElement element)
+	private void QueueAncestorNameRefresh(UIElement element)
 	{
-		for (UIElement? current = element; current is not null; current = current.GetParent() as UIElement)
+		if (IsDisposed || !IsAccessibilityEnabled || _isCreatingAOM)
 		{
-			if (IsRealizedVirtualizedItem(current.Visual.Handle))
+			return;
+		}
+		if (_pendingNameRefresh.Enqueue(element) && !_nameRefreshQueued)
+		{
+			_nameRefreshQueued = true;
+			NativeDispatcher.Main.Enqueue(_drainAncestorNameRefresh);
+		}
+	}
+
+	private void DrainAncestorNameRefresh()
+	{
+		try
+		{
+			_pendingNameRefresh.DrainBatch(_refreshAncestorName);
+		}
+		finally
+		{
+			_nameRefreshQueued = false;
+			if (_pendingNameRefresh.HasPending)
 			{
-				if (_pendingItemNameRefresh.Add(current))
-				{
-					var item = current;
-					NativeDispatcher.Main.Enqueue(() =>
-					{
-						_pendingItemNameRefresh.Remove(item);
-						RefreshVirtualizedAncestorName(item);
-					});
-				}
-				return;
+				_nameRefreshQueued = true;
+				NativeDispatcher.Main.Enqueue(_drainAncestorNameRefresh);
 			}
 		}
 	}
 
+	private void RefreshAncestorName(UIElement item)
+	{
+		var name = IsRealizedVirtualizedItem(item.Visual.Handle)
+			? GetVirtualizedItemName(item)
+			: item.GetOrCreateAutomationPeer() is { } peer ? AriaMapper.ResolveLabel(peer) : null;
+		NativeMethods.UpdateAriaLabel(item.Visual.Handle, name ?? string.Empty);
+		ReconcileBodyTextSubtree(item);
+	}
+
 	private void ReconcileBodyTextSubtree(UIElement item)
 	{
+		if (item.Visibility == Visibility.Collapsed || IsPeerExcluded(item) || item is ListViewBase or ItemsRepeater)
+		{
+			return;
+		}
 		foreach (var child in item.GetChildren())
 		{
 			if (child is TextBlock)

@@ -24,25 +24,12 @@ namespace Uno.UI.Runtime.Skia {
 		public static activateFocusTrap(modalHandle: number, triggerHandle: number, focusableHandles: number[]): void {
 			const parentState = FocusTrap.activeTrap;
 
-			// Hide all semantic elements outside the modal
-			const semanticsRoot = document.getElementById("uno-semantics-root");
-			const modalElement = document.getElementById(`uno-semantics-${modalHandle}`);
-			const hiddenElements: FocusTrapState["hiddenElements"] = [];
-
-			if (semanticsRoot && modalElement) {
-				const allElements = semanticsRoot.querySelectorAll("[id^='uno-semantics-']");
-				allElements.forEach((el: HTMLElement) => {
-					if (el !== modalElement && !modalElement.contains(el) && !el.contains(modalElement)) {
-						hiddenElements.push({
-							element: el,
-							originalAriaHidden: el.getAttribute("aria-hidden"),
-							originalTabIndex: el.getAttribute("tabindex")
-						});
-						el.setAttribute("aria-hidden", "true");
-						el.setAttribute("tabindex", "-1");
-					}
-				});
+			// Only the top scope owns a mask. Stacking snapshots would hide sibling
+			// dialogs and restore stale attributes when a suspended scope closes first.
+			if (parentState) {
+				FocusTrap.restoreHiddenElements(parentState);
 			}
+			const modalElement = document.getElementById(`uno-semantics-${modalHandle}`);
 
 			// Set role="dialog" on modal element
 			if (modalElement) {
@@ -68,10 +55,11 @@ namespace Uno.UI.Runtime.Skia {
 				modalHandle,
 				triggerHandle,
 				focusableHandles,
-				hiddenElements,
+				hiddenElements: [],
 				keydownHandler,
 				parentState
 			};
+			FocusTrap.hideBackgroundElements(FocusTrap.activeTrap);
 
 			// Focus the first focusable element in the modal
 			if (focusableHandles.length > 0) {
@@ -102,7 +90,8 @@ namespace Uno.UI.Runtime.Skia {
 						document.removeEventListener("keydown", target.keydownHandler, true);
 						FocusTrap.restoreHiddenElements(target);
 						FocusTrap.removeDialogRole(target.modalHandle);
-						// Splice out of linked list
+						// The surviving child must return past the closed scope.
+						current.triggerHandle = target.triggerHandle;
 						current.parentState = target.parentState;
 						return;
 					}
@@ -122,6 +111,9 @@ namespace Uno.UI.Runtime.Skia {
 
 			// Reactivate parent trap or clear
 			FocusTrap.activeTrap = trap.parentState;
+			if (FocusTrap.activeTrap) {
+				FocusTrap.hideBackgroundElements(FocusTrap.activeTrap);
+			}
 
 			// Restore focus to trigger element, with fallback to parent trap or body
 			if (trap.triggerHandle) {
@@ -205,6 +197,25 @@ namespace Uno.UI.Runtime.Skia {
 			return FocusTrap.activeTrap?.modalHandle ?? 0;
 		}
 
+		private static hideBackgroundElements(trap: FocusTrapState): void {
+			const semanticsRoot = document.getElementById("uno-semantics-root");
+			const modalElement = document.getElementById(`uno-semantics-${trap.modalHandle}`);
+			if (semanticsRoot && modalElement) {
+				const allElements = semanticsRoot.querySelectorAll("[id^='uno-semantics-']");
+				allElements.forEach((el: HTMLElement) => {
+					if (el !== modalElement && !modalElement.contains(el) && !el.contains(modalElement)) {
+						trap.hiddenElements.push({
+							element: el,
+							originalAriaHidden: el.getAttribute("aria-hidden"),
+							originalTabIndex: el.getAttribute("tabindex")
+						});
+						el.setAttribute("aria-hidden", "true");
+						el.setAttribute("tabindex", "-1");
+					}
+				});
+			}
+		}
+
 		private static restoreHiddenElements(trap: FocusTrapState): void {
 			for (const item of trap.hiddenElements) {
 				if (item.originalAriaHidden !== null) {
@@ -218,6 +229,7 @@ namespace Uno.UI.Runtime.Skia {
 					item.element.removeAttribute("tabindex");
 				}
 			}
+			trap.hiddenElements.length = 0;
 		}
 
 		private static removeDialogRole(modalHandle: number): void {

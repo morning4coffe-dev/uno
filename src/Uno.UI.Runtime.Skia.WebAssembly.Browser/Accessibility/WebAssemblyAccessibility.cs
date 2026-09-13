@@ -36,6 +36,10 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 
 	public WebAssemblyAccessibility()
 	{
+		_pendingNameRefresh = new(_semanticParentMap, IsRealizedVirtualizedItem,
+			element => !IsDisposed && IsAccessibilityEnabled && IsAttachedToSemanticRoot(element) && !IsPeerExcluded(element));
+		_drainAncestorNameRefresh = DrainAncestorNameRefresh;
+		_refreshAncestorName = RefreshAncestorName;
 		if (this.Log().IsEnabled(LogLevel.Trace))
 		{
 			this.Log().Trace($"Initializing {nameof(WebAssemblyAccessibility)}");
@@ -53,6 +57,7 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 
 	protected override void DisposeCore()
 	{
+		_pendingNameRefresh.Clear();
 		_peerChildren.Clear();
 		_peerExcludedRoots.Clear();
 		foreach (var region in _virtualizedRegions)
@@ -482,7 +487,7 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 			{
 				DrainPendingLabelledBy();
 				QueueSemanticSubtreeGeometry(child);
-				QueueVirtualizedAncestorNameRefresh(parent);
+				QueueAncestorNameRefresh(parent);
 				QueueModalRefresh(parent);
 			}
 		}
@@ -518,7 +523,7 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 			// Only remove from DOM if this element was actually in the semantic tree
 			var childHandle = child.Visual.Handle;
 			_prunedHandles.Remove(childHandle);
-			_pendingItemNameRefresh.Remove(child);
+			_pendingNameRefresh.Remove(child);
 			_pendingLabelledBy.RemoveAll(item => item.Handle == childHandle);
 			if (_semanticParentMap.TryGetValue(childHandle, out var semanticParent))
 			{
@@ -539,7 +544,7 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 		}
 		finally
 		{
-			QueueVirtualizedAncestorNameRefresh(parent);
+			QueueAncestorNameRefresh(parent);
 			QueuePeerChildrenForAncestor(parent);
 		}
 	}
@@ -831,7 +836,7 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 			offset.X, offset.Y,
 			itemElement.Visual.Size.X, itemElement.Visual.Size.Y,
 			role, label, peer?.IsEnabled() == false, selected);
-		QueueVirtualizedAncestorNameRefresh(itemElement);
+		QueueAncestorNameRefresh(itemElement);
 	}
 
 	private void TryUnregisterVirtualizedContainer(UIElement element)
@@ -1690,7 +1695,7 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 		// runaway guard for malformed trees with no named ancestor at all -- 16 is well
 		// past any realistic XAML nesting depth for a control's own labelling chain.
 		var node = element.GetParent() as UIElement;
-		for (var depth = 0; node is not null && depth < 16; depth++, node = node.GetParent() as UIElement)
+		for (var depth = 0; node is not null && depth < SemanticNameRefreshQueue.MaxAncestorDepth; depth++, node = node.GetParent() as UIElement)
 		{
 			// Identity: a ContentControl whose Content IS this element (or whose string content matches)
 			// names itself from it (AriaMapper.ResolveLabel / FR-033), so the text is already announced.
@@ -2148,7 +2153,7 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 		Debug.Assert(IsAccessibilityEnabled);
 		ReconcileBodyTextMembership(element);
 		NativeMethods.UpdateAriaLabel(element.Visual.Handle, automationId);
-		RefreshVirtualizedAncestorName(element);
+		QueueAncestorNameRefresh(element);
 		QueueModalLabelRefresh(element);
 	}
 

@@ -47,6 +47,10 @@ namespace Uno.UI.RuntimeTests.Tests.Windows_UI_Xaml_Automation
 		public static string GetSemanticAttribute(UIElement element, string attribute)
 			=> InvokeBrowserJs($"(function(){{const e = document.getElementById('{GetSemanticElementId(element)}'); if (!e) {{ return ''; }} return e.getAttribute('{attribute}') || ''; }})()");
 
+		/// <summary>Reads native body text, which is represented by textContent rather than aria-label.</summary>
+		public static string GetSemanticTextContent(UIElement element)
+			=> InvokeBrowserJs($"(function(){{const e = document.getElementById('{GetSemanticElementId(element)}'); return e ? e.textContent || '' : '';}})()");
+
 		/// <summary>
 		/// Returns true when the element's semantic node has the named attribute (even if its value
 		/// is empty). Lets tests assert the omit-when-empty contract (FR-030 hygiene) — empty values
