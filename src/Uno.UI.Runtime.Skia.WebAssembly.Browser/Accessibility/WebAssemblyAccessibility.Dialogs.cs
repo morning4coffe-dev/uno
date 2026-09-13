@@ -16,6 +16,33 @@ internal partial class WebAssemblyAccessibility
 {
 	private readonly Dictionary<ContentDialog, ModalDialogRegistration> _modalRegistrations = new();
 
+	private void SetActiveModalScope(ModalFocusScope? scope)
+	{
+		ActiveModalScope = scope;
+		if (_liveRegionManager is { } manager)
+		{
+			manager.ActiveModalHandle = scope?.ModalHandle ?? IntPtr.Zero;
+		}
+	}
+
+	private void ActivateModalScope(ModalFocusScope scope)
+	{
+		var parent = ActiveModalScope;
+		// JS focus changes may synchronously close or open another scope.
+		SetActiveModalScope(scope);
+		scope.Activate(parent);
+	}
+
+	private void DeactivateModalScope(ModalFocusScope scope)
+	{
+		if (!scope.IsActive)
+		{
+			return;
+		}
+		SetActiveModalScope(ReferenceEquals(ActiveModalScope, scope) ? scope.ParentScope : ActiveModalScope);
+		scope.Deactivate(ActiveModalScope);
+	}
+
 	private static ContentDialog? FindAncestorDialog(UIElement element)
 	{
 		for (UIElement? current = element; current is not null; current = current.GetParent() as UIElement)
@@ -207,12 +234,7 @@ internal partial class WebAssemblyAccessibility
 			if (_scope is not { IsActive: true })
 			{
 				_scope = new ModalFocusScope(handle, _triggerHandle, children);
-				_scope.Activate(_owner.ActiveModalScope);
-				_owner.ActiveModalScope = _scope;
-				if (_owner._liveRegionManager is { } manager)
-				{
-					manager.ActiveModalHandle = handle;
-				}
+				_owner.ActivateModalScope(_scope);
 			}
 			else
 			{
@@ -225,15 +247,7 @@ internal partial class WebAssemblyAccessibility
 		{
 			if (_scope is { IsActive: true } scope)
 			{
-				scope.Deactivate();
-				if (ReferenceEquals(_owner.ActiveModalScope, scope))
-				{
-					_owner.ActiveModalScope = scope.ParentScope;
-					if (_owner._liveRegionManager is { } manager)
-					{
-						manager.ActiveModalHandle = scope.ParentScope?.ModalHandle ?? IntPtr.Zero;
-					}
-				}
+				_owner.DeactivateModalScope(scope);
 			}
 		}
 

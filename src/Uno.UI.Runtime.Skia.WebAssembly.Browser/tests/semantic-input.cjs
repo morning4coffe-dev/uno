@@ -324,6 +324,85 @@ const path = require("node:path");
 				assert.equal(await page.evaluate(() => document.activeElement.id), "uno-semantics-1000");
 			});
 		}
+		for (const disabled of [false, true]) {
+			for (const removeAncestor of [false, true]) {
+				await test(`suspended modal keeps current children (disabled: ${disabled}, ancestor removed: ${removeAncestor})`, async page => {
+					await page.evaluate(({ disabled, removeAncestor }) => {
+						document.getElementById("uno-semantics-root").innerHTML = `
+							<button id="uno-semantics-1100">Background</button>
+							<div id="uno-semantics-1110"><button id="uno-semantics-1111">Ancestor action</button></div>
+							<div id="uno-semantics-1120">
+								<button id="uno-semantics-1121">Old trigger</button>
+								<button id="uno-semantics-1122">Old last</button>
+							</div>
+							<div id="uno-semantics-1130"><button id="uno-semantics-1131">Child action</button></div>`;
+						const trap = Uno.UI.Runtime.Skia.FocusTrap;
+						if (removeAncestor) {
+							trap.activateFocusTrap(1110, 1100, [1111]);
+						}
+						trap.activateFocusTrap(1120, removeAncestor ? 1111 : 1100, [1121, 1122]);
+						trap.activateFocusTrap(1130, 1121, [1131]);
+						const old = document.getElementById("uno-semantics-1121");
+						if (disabled) {
+							old.disabled = true;
+							old.setAttribute("aria-disabled", "true");
+						} else {
+							old.remove();
+						}
+						document.getElementById("uno-semantics-1122").remove();
+						document.getElementById("uno-semantics-1120").insertAdjacentHTML("beforeend", `
+							<button id="uno-semantics-1123">Replacement first</button>
+							<button id="uno-semantics-1124">Replacement last</button>`);
+						trap.updateFocusTrapChildren(1120, [1123, 1124]);
+						if (removeAncestor) {
+							trap.deactivateFocusTrap(1110);
+						}
+					}, { disabled, removeAncestor });
+					assert.equal(await page.evaluate(() => Uno.UI.Runtime.Skia.FocusTrap.getActiveTrapHandle()), 1130);
+					assert.equal(await page.locator("#uno-semantics-1120").getAttribute("aria-hidden"), "true",
+						"Updating a suspended scope must not reactivate its mask");
+					assert.equal(await page.locator("#uno-semantics-1130").getAttribute("aria-hidden"), null);
+					assert.equal(await page.evaluate(() => document.activeElement.id), "uno-semantics-1131");
+					await page.evaluate(() => Uno.UI.Runtime.Skia.FocusTrap.deactivateFocusTrap(1130));
+					assert.equal(await page.evaluate(() => document.activeElement.id), "uno-semantics-1123",
+						"Return focus must use a current child, not the removed/disabled trigger");
+					await page.keyboard.press("Shift+Tab");
+					assert.equal(await page.evaluate(() => document.activeElement.id), "uno-semantics-1124");
+					await page.keyboard.press("Tab");
+					assert.equal(await page.evaluate(() => document.activeElement.id), "uno-semantics-1123");
+					await page.evaluate(() => Uno.UI.Runtime.Skia.FocusTrap.deactivateFocusTrap(1120));
+					assert.equal(await page.evaluate(() => Uno.UI.Runtime.Skia.FocusTrap.getActiveTrapHandle()), 0);
+					assert.equal(await page.evaluate(() => document.activeElement.id), "uno-semantics-1100");
+				});
+			}
+		}
+		await test("focus restoration yields to a reentrantly opened modal", async page => {
+			await page.evaluate(() => {
+				document.getElementById("uno-semantics-root").innerHTML = `
+					<button id="uno-semantics-1400">Background</button>
+					<div id="uno-semantics-1410">
+						<button id="uno-semantics-1411">Parent first</button>
+						<button id="uno-semantics-1412">Parent last</button>
+					</div>
+					<div id="uno-semantics-1420"><button id="uno-semantics-1421">Child</button></div>
+					<div id="uno-semantics-1430"><button id="uno-semantics-1431">New child</button></div>`;
+				const trap = Uno.UI.Runtime.Skia.FocusTrap;
+				trap.activateFocusTrap(1410, 1400, [1411, 1412]);
+				trap.activateFocusTrap(1420, 1411, [1421]);
+				document.getElementById("uno-semantics-1411").addEventListener("focus",
+					() => trap.activateFocusTrap(1430, 1411, [1431]), { once: true });
+				trap.deactivateFocusTrap(1420);
+			});
+			assert.equal(await page.evaluate(() => Uno.UI.Runtime.Skia.FocusTrap.getActiveTrapHandle()), 1430);
+			assert.equal(await page.evaluate(() => document.activeElement.id), "uno-semantics-1431");
+			await page.keyboard.press("Tab");
+			assert.equal(await page.evaluate(() => document.activeElement.id), "uno-semantics-1431");
+			await page.evaluate(() => {
+				Uno.UI.Runtime.Skia.FocusTrap.deactivateFocusTrap(1430);
+				Uno.UI.Runtime.Skia.FocusTrap.deactivateFocusTrap(1410);
+			});
+			assert.equal(await page.evaluate(() => document.activeElement.id), "uno-semantics-1400");
+		});
 		await test("late semantic reparenting preserves identity, focus and handlers", async page => {
 			const result = await page.evaluate(() => {
 				const oldParent = document.createElement("div");

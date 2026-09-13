@@ -115,15 +115,19 @@ namespace Uno.UI.Runtime.Skia {
 				FocusTrap.hideBackgroundElements(FocusTrap.activeTrap);
 			}
 
-			// Restore focus to trigger element, with fallback to parent trap or body
-			if (trap.triggerHandle) {
-				const triggerElement = document.getElementById(`uno-semantics-${trap.triggerHandle}`);
-				if (triggerElement) {
-					triggerElement.focus();
-				} else if (trap.parentState && trap.parentState.focusableHandles.length > 0) {
-					const fallback = document.getElementById(`uno-semantics-${trap.parentState.focusableHandles[0]}`);
-					if (fallback) {
-						fallback.focus();
+			// A suspended parent's trigger may have been removed or disabled.
+			const parent = FocusTrap.activeTrap;
+			if (!parent || parent.focusableHandles.indexOf(trap.triggerHandle) >= 0) {
+				const focused = FocusTrap.tryFocusHandle(trap.triggerHandle);
+				if (focused || FocusTrap.activeTrap !== parent) {
+					return;
+				}
+			}
+			if (parent) {
+				for (const handle of parent.focusableHandles) {
+					const focused = FocusTrap.tryFocusHandle(handle);
+					if (focused || FocusTrap.activeTrap !== parent) {
+						return;
 					}
 				}
 			}
@@ -133,9 +137,22 @@ namespace Uno.UI.Runtime.Skia {
 		 * Updates the focusable children within a modal.
 		 */
 		public static updateFocusTrapChildren(modalHandle: number, focusableHandles: number[]): void {
-			if (FocusTrap.activeTrap && FocusTrap.activeTrap.modalHandle === modalHandle) {
-				FocusTrap.activeTrap.focusableHandles = focusableHandles;
+			for (let trap = FocusTrap.activeTrap; trap; trap = trap.parentState) {
+				if (trap.modalHandle === modalHandle) {
+					trap.focusableHandles = focusableHandles;
+					return;
+				}
 			}
+		}
+
+		private static tryFocusHandle(handle: number): boolean {
+			const element = document.getElementById(`uno-semantics-${handle}`);
+			if (!element || element.matches(":disabled") || element.getAttribute("aria-disabled") === "true" ||
+				element.hidden || element.getAttribute("aria-hidden") === "true") {
+				return false;
+			}
+			element.focus();
+			return document.activeElement === element;
 		}
 
 		/**

@@ -83,6 +83,14 @@ or leave the surviving child's eventual focus-return target inside the closed
 scope. After the final close, original `aria-hidden` and `tabindex` values
 must be restored.
 
+The managed active scope and live-region modal handle must also clear after
+the final close. Closing a suspended parent must not leave it in the surviving
+child's managed parent chain. Raise a background live-region event afterward
+and check the live-region DOM content, then repeat an open/close cycle.
+While a child is open, replace or disable focusable controls in the parent;
+resuming the parent must use its updated children without exposing the
+background early.
+
 Exercise both close orders, Tab and Shift+Tab wrapping, and close/reopen.
 Inspect the exposed accessibility tree as well as keyboard focus; pixels alone
 cannot establish modal exclusion. Also test the application's actual modal
@@ -108,6 +116,9 @@ must retain their own naming and semantic behavior.
 
 The browser runtime queues name reevaluation for ordinary semantic ancestors
 as well as realized items, reading the final state after coalesced mutations.
+Only candidate ancestor discovery has the 16-ancestor bound. Attachment,
+exclusion and subtree refresh still have tree-dependent cost; the entire
+operation is not claimed to be constant-time or allocation-free.
 The same naming precedence used at creation still applies; applications
 should not need to invalidate the ancestor peer or force a resize to refresh
 an absorbed name.

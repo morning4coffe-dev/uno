@@ -16,7 +16,7 @@ namespace Uno.UI.Runtime.Skia;
 internal sealed partial class ModalFocusScope
 {
 	private readonly IntPtr _modalHandle;
-	private readonly IntPtr _triggerHandle;
+	private IntPtr _triggerHandle;
 	private readonly List<IntPtr> _focusableChildren;
 	private ModalFocusScope? _parentScope;
 	private bool _isActive;
@@ -40,7 +40,7 @@ internal sealed partial class ModalFocusScope
 	internal IntPtr TriggerHandle => _triggerHandle;
 	/// <summary>Gets the parent scope for nested modal support.</summary>
 	internal ModalFocusScope? ParentScope => _parentScope;
-	/// <summary>Gets whether this focus trap is currently active.</summary>
+	/// <summary>Gets whether this scope is registered, including while suspended by a child.</summary>
 	internal bool IsActive => _isActive;
 
 	/// <summary>
@@ -67,13 +67,27 @@ internal sealed partial class ModalFocusScope
 	/// <summary>
 	/// Deactivates this focus trap. Restores aria-hidden and focus to trigger element.
 	/// </summary>
-	internal void Deactivate()
+	internal void Deactivate(ModalFocusScope? activeScope)
 	{
+		if (!_isActive)
+		{
+			return;
+		}
 		if (this.Log().IsEnabled(LogLevel.Debug))
 		{
 			this.Log().Debug($"Deactivate modal={_modalHandle} trigger={_triggerHandle}");
 		}
 		_isActive = false;
+		for (var child = activeScope; child is not null; child = child._parentScope)
+		{
+			if (ReferenceEquals(child._parentScope, this))
+			{
+				child._parentScope = _parentScope;
+				child._triggerHandle = _triggerHandle;
+				break;
+			}
+		}
+		_parentScope = null;
 		NativeMethods.DeactivateFocusTrap(_modalHandle);
 	}
 

@@ -31,7 +31,7 @@ namespace Uno.UI.RuntimeTests.Tests.Windows_UI_Xaml_Controls
 {
 	[TestClass]
 	[RunsOnUIThread]
-	public class Given_ContentDialog
+	public partial class Given_ContentDialog
 	{
 #if HAS_UNO
 		[TestMethod]

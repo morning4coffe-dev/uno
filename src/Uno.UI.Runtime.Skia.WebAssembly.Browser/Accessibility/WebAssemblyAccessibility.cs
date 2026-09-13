@@ -84,7 +84,7 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 	private FocusSynchronizer? _focusSynchronizer;
 	private UIElement? _focusSearchRoot;
 	private bool _suppressDeparture;
-	internal ModalFocusScope? ActiveModalScope { get; set; }
+	internal ModalFocusScope? ActiveModalScope { get; private set; }
 	private readonly List<VirtualizedSemanticRegion> _virtualizedRegions = new();
 	private const int PreserveTextSelectionSentinel = -1;
 
