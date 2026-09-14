@@ -126,6 +126,17 @@ After restoring the aggregate build project, run
 packer selection. A `NuGetBin` override is accepted only when its bytes match
 the restored pinned executable; the legacy tool is rejected before preparation.
 
+The Apple UIKit ICU package-selection contract can run independently and does
+not restore its metadata-only package references:
+
+```powershell
+pwsh -NoProfile -File build\Test-PackageContracts.ps1 -AppleIcuOnly -DotNetPath C:\path\to\dotnet.exe
+```
+
+It evaluates the neutral outer build, .NET 9 and .NET 10 iOS/tvOS builds, and
+a Mac Catalyst control. It also verifies `UnoICUVersion` forwarding with an
+explicitly non-shipping version string; that string is never restored.
+
 Normal preparation stamps task namespaces, sibling dependency versions and the
 selected `RepositoryUrl` into the packing definitions. Run it in an owned
 staging checkout, preserving the clean source revision and a final manifest of
@@ -141,6 +152,16 @@ consumers remain separate requirements.
 
 The versions used are centralized in the [Directory.Build.targets](https://github.com/unoplatform/uno/blob/master/src/Directory.Build.targets) file, and all the
 locations where `<PackageReference />` are used.
+
+Apple UIKit uses `Uno.icu-ios` for iOS and Mac Catalyst, and `Uno.icu-tvos` for
+tvOS. Never substitute or relabel an iOS archive for tvOS: matching CPU
+architectures do not make their Mach-O platform metadata interchangeable.
+`Uno.icu-win`, `Uno.icu-macos`, `Uno.icu-wasm`, `Uno.icu-ios`, and
+`Uno.icu-tvos` must all be published at one approved coordinated version before
+updating `UnoICUVersion` or shipping the five-package cohort. The current
+default remains `77.2.1`, where `Uno.icu-tvos` is unavailable; therefore the
+correct tvOS wiring is local/unshipped until all five package IDs are published
+at the selected replacement version and the central pin is updated.
 
 When updating the versions of NuGet packages, make sure to update all the .nuspec files in the [`build/nuget` folder](https://github.com/unoplatform/uno/tree/master/build/nuget).
 

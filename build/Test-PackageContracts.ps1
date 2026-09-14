@@ -1,5 +1,104 @@
-param([string]$DotNetPath = (Get-Command dotnet -ErrorAction Stop).Source)
+[CmdletBinding()]
+param(
+	[string]$DotNetPath = (Get-Command dotnet -ErrorAction Stop).Source,
+	[switch]$AppleIcuOnly
+)
+
 $ErrorActionPreference = 'Stop'
+$root = Split-Path $PSScriptRoot -Parent
+$appleUIKitProject = Join-Path $root 'src\Uno.UI.Runtime.Skia.AppleUIKit\Uno.UI.Runtime.Skia.AppleUIKit.csproj'
+$nonShippingVersion = '0.0.0-nonshipping-apple-icu-wiring-contract'
+
+function Get-AppleIcuEvaluation {
+	param(
+		[Parameter(Mandatory)][string]$Name,
+		[string]$TargetFramework,
+		[string]$ExpectedPlatform,
+		[Parameter(Mandatory)][bool]$ExpectedIOS,
+		[Parameter(Mandatory)][bool]$ExpectedTvOS,
+		[Parameter(Mandatory)][bool]$ExpectedCatalyst,
+		[Parameter(Mandatory)][string]$ExpectedPackage,
+		[string]$Version
+	)
+
+	$arguments = @(
+		'msbuild',
+		$appleUIKitProject,
+		'-nologo',
+		'-getProperty:TargetFramework,TargetPlatformIdentifier,IsIOS,IsTvOS,IsCatalyst,UnoICUVersion',
+		'-getItem:PackageReference'
+	)
+	if ($TargetFramework) {
+		$arguments += "-p:TargetFramework=$TargetFramework"
+	}
+	if ($Version) {
+		$arguments += "-p:UnoICUVersion=$Version"
+	}
+
+	$output = @(& $DotNetPath @arguments)
+	if ($LASTEXITCODE -ne 0) {
+		throw "Apple ICU evaluation '$Name' failed."
+	}
+	$evaluation = ($output -join [Environment]::NewLine) | ConvertFrom-Json
+	$properties = $evaluation.Properties
+	$icuPackages = @($evaluation.Items.PackageReference | Where-Object Identity -Like 'Uno.icu-*')
+	$expectedIOSValue = $ExpectedIOS.ToString().ToLowerInvariant()
+	$expectedTvOSValue = $ExpectedTvOS.ToString().ToLowerInvariant()
+	$expectedCatalystValue = $ExpectedCatalyst.ToString().ToLowerInvariant()
+
+	if ($properties.TargetFramework -cne $TargetFramework -or
+		$properties.TargetPlatformIdentifier -cne $ExpectedPlatform -or
+		$properties.IsIOS -cne $expectedIOSValue -or
+		$properties.IsTvOS -cne $expectedTvOSValue -or
+		$properties.IsCatalyst -cne $expectedCatalystValue) {
+		throw "Apple ICU evaluation '$Name' did not retain its requested framework/platform identity."
+	}
+	if ($icuPackages.Count -ne 1 -or $icuPackages[0].Identity -cne $ExpectedPackage) {
+		$actual = $icuPackages.Identity -join ', '
+		throw "Apple ICU evaluation '$Name' expected only '$ExpectedPackage', found '$actual'."
+	}
+	if (-not $properties.UnoICUVersion -or $icuPackages[0].Version -cne $properties.UnoICUVersion) {
+		throw "Apple ICU evaluation '$Name' did not use the shared UnoICUVersion."
+	}
+	if ($Version -and $properties.UnoICUVersion -cne $Version) {
+		throw "Apple ICU evaluation '$Name' did not forward the explicit UnoICUVersion override."
+	}
+
+	[pscustomobject]@{
+		Name = $Name
+		TargetFramework = $properties.TargetFramework
+		TargetPlatformIdentifier = $properties.TargetPlatformIdentifier
+		IsIOS = $properties.IsIOS
+		IsTvOS = $properties.IsTvOS
+		IsCatalyst = $properties.IsCatalyst
+		Package = $icuPackages[0].Identity
+		Version = $icuPackages[0].Version
+	}
+}
+
+$cases = @(
+	@{ Name = 'neutral'; TargetFramework = ''; ExpectedPlatform = ''; ExpectedIOS = $false; ExpectedTvOS = $false; ExpectedCatalyst = $false; ExpectedPackage = 'Uno.icu-ios' },
+	@{ Name = 'net9-ios'; TargetFramework = 'net9.0-ios18.0'; ExpectedPlatform = 'ios'; ExpectedIOS = $true; ExpectedTvOS = $false; ExpectedCatalyst = $false; ExpectedPackage = 'Uno.icu-ios' },
+	@{ Name = 'net9-tvos'; TargetFramework = 'net9.0-tvos18.0'; ExpectedPlatform = 'tvos'; ExpectedIOS = $false; ExpectedTvOS = $true; ExpectedCatalyst = $false; ExpectedPackage = 'Uno.icu-tvos' },
+	@{ Name = 'net10-ios'; TargetFramework = 'net10.0-ios26.0'; ExpectedPlatform = 'ios'; ExpectedIOS = $true; ExpectedTvOS = $false; ExpectedCatalyst = $false; ExpectedPackage = 'Uno.icu-ios' },
+	@{ Name = 'net10-tvos'; TargetFramework = 'net10.0-tvos26.0'; ExpectedPlatform = 'tvos'; ExpectedIOS = $false; ExpectedTvOS = $true; ExpectedCatalyst = $false; ExpectedPackage = 'Uno.icu-tvos' },
+	@{ Name = 'net10-maccatalyst'; TargetFramework = 'net10.0-maccatalyst26.0'; ExpectedPlatform = 'maccatalyst'; ExpectedIOS = $false; ExpectedTvOS = $false; ExpectedCatalyst = $true; ExpectedPackage = 'Uno.icu-ios' }
+)
+$defaultEvaluations = @($cases | ForEach-Object { Get-AppleIcuEvaluation @_ })
+$defaultVersion = $defaultEvaluations[0].Version
+if (@($defaultEvaluations | Where-Object Version -CNE $defaultVersion).Count) {
+	throw 'Default Apple ICU evaluations did not share one UnoICUVersion.'
+}
+$overrideEvaluations = @($cases |
+	Where-Object TargetFramework -Match '^net(?:9|10)\.0-(?:ios|tvos)' |
+	ForEach-Object { Get-AppleIcuEvaluation @_ -Version $nonShippingVersion })
+Write-Output ($defaultEvaluations + $overrideEvaluations | ConvertTo-Json -Depth 3)
+Write-Output "Apple UIKit ICU package selection and shared-version forwarding passed (metadata evaluation only; '$nonShippingVersion' was not restored)."
+
+if ($AppleIcuOnly) {
+	return
+}
+
 $project = Join-Path $PSScriptRoot 'Uno.UI.Build.csproj'
 $common = @('msbuild', $project, '-nologo', '-p:CombinedConfiguration=Release|AnyCPU')
 $temporary = Join-Path ([IO.Path]::GetTempPath()) ('uno-packer-contract-' + [Guid]::NewGuid().ToString('N'))
