@@ -20,11 +20,16 @@ selected dependency and audit policy:
 
 ```powershell
 dotnet restore src/SourceGenerators/Uno.UI.Tasks/Uno.UI.Tasks.csproj `
+  -p:Configuration=Release -p:TreatWarningsAsErrors=true `
   -p:NuGetAudit=true -p:NuGetAuditMode=all
+python build/test-scripts/test_validate_uno_ui_tasks_crypto_graph.py
 python build/test-scripts/validate-uno-ui-tasks-crypto-graph.py
 ```
 
 The graph check rejects a missing or non-private direct pin, an affected
-selected version, absent compile/runtime assets, disabled auditing, or
-suppressed audit warnings. A passing restore and graph check do not establish
-task execution, framework compilation, or runtime acceptance.
+selected version, an empty or partial framework/target graph, incomplete
+package-library metadata, absent compile/runtime graph assets, disabled
+auditing, or suppressed audit warnings. The fixture check covers those
+fail-closed cases without claiming package files or tasks were executed.
+A passing restore and graph check do not establish task execution, framework
+compilation, or runtime acceptance.
