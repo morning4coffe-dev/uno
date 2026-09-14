@@ -1,4 +1,4 @@
-<Project>
+<Project InitialTargets="ValidateUnoSourceLinkConfiguration">
 	<Import Project="Uno.CrossTargetting.targets" />
 
 	<PropertyGroup>
@@ -7,7 +7,8 @@
 		<CommunityToolkitMvvmVersion>8.2.2</CommunityToolkitMvvmVersion>
 	</PropertyGroup>
 
-	<Target Name="ValidateUnoSourceLinkConfiguration" BeforeTargets="PrepareForBuild;GenerateSourceLinkFile">
+	<!-- InitialTargets also rejects direct writer entry when its EnableSourceLink condition is false. -->
+	<Target Name="ValidateUnoSourceLinkConfiguration" BeforeTargets="PrepareForBuild;_GenerateSourceLinkFile">
 		<Error Condition="'$(SourceLinkEnabled)' != '$(EnableSourceLink)'"
 			   Text="SourceLinkEnabled and EnableSourceLink must agree. Set either switch, or set both to the same value." />
 	</Target>

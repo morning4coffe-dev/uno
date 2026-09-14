@@ -8,6 +8,12 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
+if (args.Length == 4 && args[0] == "remap")
+{
+	SourceLinkFixtures.Remap(args[1], args[2], args[3]);
+	return;
+}
+
 if (args.Length == 3 && args[0] == "corrupt-checksum")
 {
 	using var input = File.OpenRead(args[1]);
@@ -83,26 +89,16 @@ if (enabled ? mappings.Count != 1 : mappings.Count != 0 || embedded.Count != 0)
 {
 	throw new InvalidDataException(enabled ? "Missing unique SourceLink record." : "SourceLink-off leaked mapping or embedded source.");
 }
-var expectedUrl = $"https://raw.githubusercontent.com/{repositoryUrl["https://github.com/".Length..]}/{revision}/*";
-if (enabled && (mappings[0].Documents.Count == 0 || mappings[0].Documents.Any(p => p.Value != expectedUrl)))
-{
-	throw new InvalidDataException("SourceLink repository/revision mismatch.");
-}
+var expectedUrl = $"https://raw.githubusercontent.com/{repositoryUrl["https://github.com/".Length..]}/{revision}/";
+var sourceLink = enabled ? new SourceLinkMappings(mappings[0], expectedUrl) : null;
 
 var documents = new List<DocumentResult>();
 foreach (var handle in metadata.Documents)
 {
 	var document = metadata.GetDocument(handle);
 	var name = metadata.GetString(document.Name);
-	var matching = enabled
-		? mappings[0].Documents.Keys.Where(key => key.EndsWith('*') && name.StartsWith(key[..^1], StringComparison.Ordinal)).ToArray()
-		: [];
 	string local;
-	if (matching.Length == 1)
-	{
-		local = Path.GetFullPath(Path.Combine(repositoryRoot, name[(matching[0].Length - 1)..]));
-	}
-	else if (name.StartsWith("/_/", StringComparison.Ordinal))
+	if (name.StartsWith("/_/", StringComparison.Ordinal))
 	{
 		local = Path.GetFullPath(Path.Combine(repositoryRoot, name[3..]));
 	}
@@ -113,6 +109,17 @@ foreach (var handle in metadata.Documents)
 	if (!Within(local, repositoryRoot) && !Within(local, intermediateRoot))
 	{
 		throw new InvalidDataException($"PDB document escapes the selected source/intermediate roots: {name}");
+	}
+	var generated = Within(local, intermediateRoot);
+	string? mappedPath = null;
+	if (sourceLink is not null && !generated)
+	{
+		mappedPath = sourceLink.Resolve(name);
+		var relative = Path.GetRelativePath(repositoryRoot, local).Replace('\\', '/');
+		if (!string.Equals(mappedPath, relative, StringComparison.Ordinal))
+		{
+			throw new InvalidDataException($"Unusable SourceLink mapping: resolved path '{mappedPath}' does not match '{relative}' for {name}.");
+		}
 	}
 	var sourceBytes = File.ReadAllBytes(local);
 	var row = MetadataTokens.GetRowNumber(handle);
@@ -132,7 +139,6 @@ foreach (var handle in metadata.Documents)
 	{
 		throw new InvalidDataException($"PDB source checksum/content mismatch: {name}");
 	}
-	var generated = Within(local, intermediateRoot);
 	string? blobHash = null;
 	string? binding = null;
 	if (!generated)
@@ -153,7 +159,7 @@ foreach (var handle in metadata.Documents)
 			throw new InvalidDataException($"Source does not match the selected Git blob: {relative}");
 		}
 	}
-	documents.Add(new(name, Convert.ToHexString(actualHash), embedded.ContainsKey(row), generated, blobHash, binding));
+	documents.Add(new(name, Convert.ToHexString(actualHash), embedded.ContainsKey(row), generated, blobHash, binding, mappedPath));
 }
 if (documents.Count == 0 || documents.All(d => d.Generated))
 {
@@ -230,9 +236,10 @@ static async Task<byte[]> GitBlob(string root, string specification)
 }
 
 internal sealed record SourceLinkMap([property: JsonPropertyName("documents")] Dictionary<string, string> Documents);
-internal sealed record DocumentResult(string Name, string DocumentChecksum, bool Embedded, bool Generated, string? GitBlobSha256, string? GitBinding);
+internal sealed record DocumentResult(string Name, string DocumentChecksum, bool Embedded, bool Generated, string? GitBlobSha256, string? GitBinding, string? SourceLinkPath);
 internal sealed record VerificationResult(bool SourceLinkEnabled, string Revision, Guid PdbId, List<DocumentResult> Documents);
 
+[JsonSourceGenerationOptions(AllowDuplicateProperties = false)]
 [JsonSerializable(typeof(SourceLinkMap))]
 [JsonSerializable(typeof(VerificationResult))]
 internal partial class JsonContext : JsonSerializerContext;

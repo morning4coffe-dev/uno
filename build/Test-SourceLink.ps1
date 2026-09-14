@@ -35,6 +35,8 @@ $verifier = Join-Path $PSScriptRoot "SourceLinkVerification\bin\Release\$framewo
 $commands = [Collections.Generic.List[object]]::new()
 $cases = [Collections.Generic.List[object]]::new()
 $defaults = [Collections.Generic.List[object]]::new()
+$mappingCases = [Collections.Generic.List[object]]::new()
+$contradictions = [Collections.Generic.List[object]]::new()
 $configHash = (Get-FileHash -LiteralPath $RestoreConfigFile).Hash
 
 function Invoke-SourceLinkCommand {
@@ -162,8 +164,28 @@ try {
 			$pdb = Join-Path $binary "Uno.Foundation.Logging.pdb"
 			$verification = Invoke-SourceLinkCommand "$name-pdb" @($verifier, $mode, $dll, $pdb, $root, $intermediate, $revision, $repository)
 			$cases.Add(@{ Name = $name; Effective = $effective; Assets = $assetsPath; AssetsSha256 = (Get-FileHash $assetsPath).Hash;
-				TaskLoads = $loads; Pdb = ($verification | ConvertFrom-Json) })
+				TaskLoads = $loads; TaskLoadScope = "Pinned package overrides only; off mode still uses SDK tasks.";
+				Pdb = ($verification | ConvertFrom-Json) })
 			if ($enabled) {
+				$pdbHash = (Get-FileHash $pdb).Hash
+				foreach ($kind in @("wrong-prefix", "wrong-specific-path", "ambiguous", "invalid-wildcard", "duplicate-key", "specific", "exact")) {
+					$fixture = Join-Path $directory "$kind.pdb"
+					Invoke-SourceLinkCommand "$name-$kind-fixture" @($verifier, "remap", $kind, $pdb, $fixture) | Out-Null
+					$reject = $kind -notin @("specific", "exact")
+					$result = Invoke-SourceLinkCommand "$name-$kind" @($verifier, "on", $dll, $fixture, $root, $intermediate, $revision, $repository) -ExpectFailure:$reject
+					$expectedError = switch ($kind) {
+						"wrong-prefix" { 'Unusable SourceLink mapping: no matching key' }
+						"wrong-specific-path" { 'Unusable SourceLink mapping: resolved path' }
+						"ambiguous" { 'Unusable SourceLink mapping: ambiguous case-insensitive key' }
+						"invalid-wildcard" { 'Unusable SourceLink mapping: invalid wildcard pattern' }
+						"duplicate-key" { 'Duplicate properties not allowed' }
+					}
+					if ($reject -and $result -notmatch $expectedError) { throw "Mapping fixture $kind failed for the wrong reason." }
+					$mappingCases.Add(@{ Framework = $tfm; Kind = $kind; Rejected = $reject;
+						OriginalPdbSha256 = $pdbHash; Fixture = $fixture; FixtureSha256 = (Get-FileHash $fixture).Hash;
+						Verification = if ($reject) { $null } else { $result | ConvertFrom-Json } })
+				}
+				if ((Get-FileHash $pdb).Hash -cne $pdbHash) { throw "Mapping fixtures changed the original PDB." }
 				$corrupt = Join-Path $directory "corrupt-checksum.pdb"
 				Invoke-SourceLinkCommand "$name-corrupt-fixture" @($verifier, "corrupt-checksum", $pdb, $corrupt) | Out-Null
 				$negative = Invoke-SourceLinkCommand "$name-corrupt-rejected" @($verifier, "on", $dll, $corrupt, $root, $intermediate, $revision, $repository) -ExpectFailure
@@ -173,18 +195,35 @@ try {
 			}
 		}
 	}
-	$conflict = Invoke-SourceLinkCommand "contradictory-switches" @(
-		"msbuild", $logging, "-nologo", "-t:GenerateSourceLinkFile", "-p:Configuration=Release",
-		"-p:TargetFramework=net9.0", "-p:SourceLinkEnabled=false", "-p:EnableSourceLink=true",
-		"-p:BaseIntermediateOutputPath=$(Join-Path $OutputDirectory 'off-net9.0\obj')\",
-		"-p:OutputPath=$(Join-Path $OutputDirectory 'off-net9.0\bin')\") -ExpectFailure
-	if ($conflict -notmatch 'SourceLinkEnabled and EnableSourceLink must agree') {
-		throw "Contradictory switches failed for the wrong reason."
+	foreach ($tfm in @("net9.0", "net10.0")) {
+		foreach ($target in @("GenerateSourceLinkFile", "_GenerateSourceLinkFile", "PrepareForBuild")) {
+			foreach ($enabled in @($false, $true)) {
+				$name = "contradiction-$tfm-$target-repo-$enabled"
+				$directory = Join-Path $OutputDirectory $name
+				$intermediate = Join-Path $directory "obj"
+				New-Item -ItemType Directory -Path $intermediate | Out-Null
+				$conflict = Invoke-SourceLinkCommand $name @(
+					"msbuild", $logging, "-nologo", "-t:$target", "-p:Configuration=Release",
+					"-p:TargetFramework=$tfm", "-p:SourceLinkEnabled=$($enabled.ToString().ToLowerInvariant())",
+					"-p:EnableSourceLink=$((!$enabled).ToString().ToLowerInvariant())",
+					"-p:IntermediateOutputPath=$intermediate\", "-p:BaseIntermediateOutputPath=$intermediate\",
+					"-p:OutputPath=$directory\bin\") -ExpectFailure
+				if ($conflict -notmatch 'SourceLinkEnabled and EnableSourceLink must agree') {
+					throw "Contradictory switches failed for the wrong reason."
+				}
+				$files = @(Get-ChildItem -LiteralPath $directory -Recurse -File -Filter "*.sourcelink.json")
+				$contradictions.Add(@{ Framework = $tfm; Target = $target; RepositoryEnabled = $enabled;
+					Directory = $directory; MappingFilesCreated = $files.Count })
+				if ($files.Count) { throw "Contradictory switches wrote a SourceLink mapping before failure." }
+			}
+		}
 	}
 	Write-Output "PASS: real Logging net9/net10 SourceLink on/off, loaded patched tasks and complete PDB/source binding."
 }
 finally {
 	if ((Get-FileHash -LiteralPath $RestoreConfigFile).Hash -cne $configHash) { throw "Restore configuration changed." }
-	@{ Sdk = $sdkVersion; Revision = $revision; Repository = $repository; ConfigSha256 = $configHash; Commands = @($commands); Defaults = @($defaults); Cases = @($cases) } |
+	@{ Sdk = $sdkVersion; Revision = $revision; Repository = $repository; ConfigSha256 = $configHash;
+		Commands = @($commands); Defaults = @($defaults); Cases = @($cases);
+		MappingCases = @($mappingCases); Contradictions = @($contradictions) } |
 		ConvertTo-Json -Depth 12 | Set-Content (Join-Path $OutputDirectory "results.json")
 }
