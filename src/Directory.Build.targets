@@ -187,6 +187,7 @@
 		<PackageReference Update="Uno.icu-macos" Version="$(UnoICUVersion)" />
 		<PackageReference Update="Uno.icu-wasm" Version="$(UnoICUVersion)" />
 		<PackageReference Update="Uno.icu-ios" Version="$(UnoICUVersion)" />
+		<PackageReference Update="Uno.icu-tvos" Version="$(UnoICUVersion)" />
 		<PackageReference Update="Uno.icu-win" Version="$(UnoICUVersion)" />
 	</ItemGroup>
 
