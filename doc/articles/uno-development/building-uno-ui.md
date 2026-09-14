@@ -162,10 +162,11 @@ local/private evaluation may use an explicit `UnoICUVersion` with that complete
 set before package signing or public release; doing so does not authorize
 signing or publication. Before updating the normal public default or shipping
 the cohort, all five IDs must be available from the selected normal package
-source at that default version. The current default remains `77.2.1`, where
-`Uno.icu-tvos` is unavailable; therefore the correct tvOS wiring remains
-local/unshipped until a coordinated public default is selected, validated, and
-set in the central pin.
+source at that default version. The normal public default is `77.4.0-dev.1`.
+A qualified private cohort remains an explicit `UnoICUVersion` override and
+must not replace that public default. Package availability, compatible targets,
+and a successful restore do not establish public/private native-byte
+equivalence, runtime acceptance, or permission to sign or publish packages.
 
 When updating the versions of NuGet packages, make sure to update all the .nuspec files in the [`build/nuget` folder](https://github.com/unoplatform/uno/tree/master/build/nuget).
 
