@@ -13,6 +13,8 @@
 
 	<ItemGroup>
 		<PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" PrivateAssets="All" />
+		<!-- Keep the MSBuild 17.8 compatibility baseline while overriding its vulnerable transitive ASN.1 dependency. -->
+		<PackageReference Include="System.Formats.Asn1" Version="8.0.1" PrivateAssets="All" />
 		<PackageReference Include="Microsoft.Build" Version="15.9.20" ExcludeAssets="runtime" />
 		<PackageReference Include="Microsoft.Build.Framework" Version="17.8.43" ExcludeAssets="runtime" />
 		<PackageReference Include="Microsoft.Build.Tasks.Core" Version="17.8.43" ExcludeAssets="runtime" />
