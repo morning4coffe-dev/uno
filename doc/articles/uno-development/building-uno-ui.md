@@ -157,11 +157,15 @@ Apple UIKit uses `Uno.icu-ios` for iOS and Mac Catalyst, and `Uno.icu-tvos` for
 tvOS. Never substitute or relabel an iOS archive for tvOS: matching CPU
 architectures do not make their Mach-O platform metadata interchangeable.
 `Uno.icu-win`, `Uno.icu-macos`, `Uno.icu-wasm`, `Uno.icu-ios`, and
-`Uno.icu-tvos` must all be published at one approved coordinated version before
-updating `UnoICUVersion` or shipping the five-package cohort. The current
-default remains `77.2.1`, where `Uno.icu-tvos` is unavailable; therefore the
-correct tvOS wiring is local/unshipped until all five package IDs are published
-at the selected replacement version and the central pin is updated.
+`Uno.icu-tvos` must come from one complete, approved, same-version set. A
+local/private evaluation may use an explicit `UnoICUVersion` with that complete
+set before package signing or public release; doing so does not authorize
+signing or publication. Before updating the normal public default or shipping
+the cohort, all five IDs must be available from the selected normal package
+source at that default version. The current default remains `77.2.1`, where
+`Uno.icu-tvos` is unavailable; therefore the correct tvOS wiring remains
+local/unshipped until a coordinated public default is selected, validated, and
+set in the central pin.
 
 When updating the versions of NuGet packages, make sure to update all the .nuspec files in the [`build/nuget` folder](https://github.com/unoplatform/uno/tree/master/build/nuget).
 
