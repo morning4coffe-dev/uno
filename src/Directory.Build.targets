@@ -7,6 +7,11 @@
 		<CommunityToolkitMvvmVersion>8.2.2</CommunityToolkitMvvmVersion>
 	</PropertyGroup>
 
+	<Target Name="ValidateUnoSourceLinkConfiguration" BeforeTargets="PrepareForBuild;GenerateSourceLinkFile">
+		<Error Condition="'$(SourceLinkEnabled)' != '$(EnableSourceLink)'"
+			   Text="SourceLinkEnabled and EnableSourceLink must agree. Set either switch, or set both to the same value." />
+	</Target>
+
 	<!-- 
 	Disable analyzers for eligible projects in samples to improve build performance.
 	To disable analyzers for a project, BOTH the global environment variable UNO_DISABLE_ANALYZERS_IN_SAMPLES=true AND the project property UnoDisableAnalyzersForSamples=true must be set.
