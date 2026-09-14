@@ -47,7 +47,7 @@ function Get-AppleIcuEvaluation {
 	$expectedCatalystValue = $ExpectedCatalyst.ToString().ToLowerInvariant()
 
 	if ($properties.TargetFramework -cne $TargetFramework -or
-		$properties.TargetPlatformIdentifier -cne $ExpectedPlatform -or
+		$properties.TargetPlatformIdentifier -ine $ExpectedPlatform -or
 		$properties.IsIOS -cne $expectedIOSValue -or
 		$properties.IsTvOS -cne $expectedTvOSValue -or
 		$properties.IsCatalyst -cne $expectedCatalystValue) {
