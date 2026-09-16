@@ -151,6 +151,19 @@ internal partial class Win32WindowWrapper : NativeWindowWrapperBase, IXamlRootHo
 
 	public static IEnumerable<HWND> GetHwnds() => _hwndToWrapper.Keys;
 
+	internal static bool HasVisibleWindows()
+	{
+		foreach (var wrapper in _hwndToWrapper.Values)
+		{
+			if (wrapper.IsVisible)
+			{
+				return true;
+			}
+		}
+
+		return false;
+	}
+
 	public static void CloseAllWindows()
 	{
 		foreach (var hwnd in _hwndToWrapper.Keys.ToList())

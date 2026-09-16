@@ -26,6 +26,10 @@
 		<Compile Include="..\Uno.UI.Runtime.Skia.Win32\Accessibility\UiaProviderDispatcher.cs" Link="Windows_UI_Xaml_Automation\UiaProviderDispatcher.cs" />
 	</ItemGroup>
 
+	<ItemGroup>
+		<Compile Remove="Fixtures\Win32HostStartup\**\*.cs" />
+	</ItemGroup>
+
 	<!--
 	Uncomment to troubleshoot source generation
 	<PropertyGroup>
@@ -145,6 +149,12 @@
 		<ProjectReference Include="..\Uno.UI.Dispatching\Uno.UI.Dispatching.Skia.csproj" />
 		<ProjectReference Include="..\Uno.UI.Composition\Uno.UI.Composition.Skia.csproj" />
 		<ProjectReference Include="..\Uno.UI.Runtime.Skia.Win32\Uno.UI.Runtime.Skia.Win32.csproj" Condition="'$(UnoWin32AutomationTests)' == 'true'" />
+		<ProjectReference Include="..\Uno.UI.Runtime.Skia.Win32.Support\Uno.UI.Runtime.Skia.Win32.Support.csproj"
+						  Condition="'$(UnoWin32AutomationTests)' == 'true'"
+						  Private="true" />
+		<ProjectReference Include="Fixtures\Win32HostStartup\Win32HostStartupFixture.csproj"
+						  Condition="'$(UnoWin32AutomationTests)' == 'true'"
+						  ReferenceOutputAssembly="false" />
 
 		<ProjectReference Include="..\AddIns\Uno.UI.Lottie\Uno.UI.Lottie.Skia.csproj" />
 		<ProjectReference Include="..\SourceGenerators\System.Xaml\Uno.Xaml.csproj" />

@@ -75,6 +75,17 @@ namespace Uno.UI.Tests.Hosting
 		}
 
 		[TestMethod]
+		public void When_RunLoop_Returns_Faulted_Task_Should_Throw_Actual_Exception()
+		{
+			// Arrange
+			var host = new TestHost_FaultedTask();
+
+			// Act & Assert
+			var exception = Assert.ThrowsExactly<InvalidOperationException>(() => host.Run());
+			Assert.AreEqual("Test exception in faulted RunLoop task", exception.Message);
+		}
+
+		[TestMethod]
 		public void When_Task_Is_Canceled_Should_Throw_TaskCanceledException()
 		{
 			// Arrange
@@ -154,6 +165,19 @@ namespace Uno.UI.Tests.Hosting
 			protected override Task RunLoop()
 			{
 				throw new InvalidOperationException("Test exception in synchronous RunLoop");
+			}
+		}
+
+		private class TestHost_FaultedTask : UnoPlatformHost
+		{
+			protected override void Initialize()
+			{
+				// No-op
+			}
+
+			protected override Task RunLoop()
+			{
+				return Task.FromException(new InvalidOperationException("Test exception in faulted RunLoop task"));
 			}
 		}
 

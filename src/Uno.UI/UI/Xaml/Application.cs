@@ -499,7 +499,14 @@ namespace Microsoft.UI.Xaml
 			}
 		}
 
-		internal void RaiseRecoverableUnhandledException(Exception e) => UnhandledException?.Invoke(this, new UnhandledExceptionEventArgs(e, false));
+		internal bool RaiseUnhandledException(Exception e, bool fatal)
+		{
+			var args = new UnhandledExceptionEventArgs(e, fatal);
+			UnhandledException?.Invoke(this, args);
+			return args.Handled;
+		}
+
+		internal void RaiseRecoverableUnhandledException(Exception e) => _ = RaiseUnhandledException(e, false);
 
 #if !UNO_HAS_ENHANCED_LIFECYCLE
 		private ApplicationTheme GetSystemTheme() =>

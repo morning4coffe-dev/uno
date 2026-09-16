@@ -158,13 +158,8 @@ public class Win32Host : SkiaHost, ISkiaApplicationHost
 
 	protected override Task RunLoop()
 	{
-		Win32EventLoop.Schedule(() => Application.Start(_ =>
-		{
-			var app = _appBuilder();
-			app.Host = this;
-
-			return app;
-		}), NativeDispatcherPriority.Normal);
+		var startup = new Win32HostStartup();
+		Win32EventLoop.Schedule(() => StartApplication(startup), NativeDispatcherPriority.Normal);
 
 		if (!_isRunning)
 		{
@@ -175,14 +170,52 @@ public class Win32Host : SkiaHost, ISkiaApplicationHost
 			{
 				Win32EventLoop.RunOnce();
 
+				if (startup.Completion.IsCompleted && !startup.Completion.IsCompletedSuccessfully)
+				{
+					Win32WindowWrapper.CloseAllWindows();
+					return startup.Completion;
+				}
+
 				if (_allWindowsClosed && !Win32EventLoop.HasMessages())
 				{
-					return Task.CompletedTask;
+					return startup.Completion;
 				}
 			}
 		}
 
 		return Task.CompletedTask;
+	}
+
+	private void StartApplication(Win32HostStartup startup)
+	{
+		Application? startedApplication = null;
+		var previousApplication = Application.Current;
+
+		startup.Run(
+			() => Application.Start(_ =>
+			{
+				var app = _appBuilder();
+				startedApplication = app;
+				app.Host = this;
+
+				return app;
+			}),
+			exception =>
+			{
+				var application = startedApplication;
+				if (application is null && !ReferenceEquals(Application.Current, previousApplication))
+				{
+					application = Application.Current;
+				}
+
+				return application?.RaiseUnhandledException(exception, fatal: true) ?? false;
+			},
+			Win32WindowWrapper.HasVisibleWindows);
+
+		if (startup.ExceptionToLog is { } exception)
+		{
+			typeof(Win32Host).LogError()?.Error("Unhandled exception during Win32 application startup.", exception);
+		}
 	}
 
 	internal static void RegisterWindow(HWND hwnd)

@@ -232,6 +232,7 @@ GlobalUnlock
 InternetGetConnectedState
 InvalidateRect
 IsChild
+IsWindow
 IsZoomed
 LoadCursor
 LoadRegTypeLib
