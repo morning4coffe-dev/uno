@@ -59,6 +59,78 @@ public class Given_DerivedAncestorNames
 
 	[TestMethod]
 	[PlatformCondition(ConditionMode.Include, RuntimeTestPlatforms.SkiaWasm)]
+	public async Task When_Body_Text_Is_Inside_NonScrollable_Pane_Then_Remains_Standalone()
+	{
+#if __SKIA__
+		var text = new TextBlock { Text = "Consumed from packages" };
+		var action = new Button { Content = "Tap" };
+		var panel = new PanePeerPanel { Width = 320, Height = 120, Children = { text, action } };
+		try
+		{
+			EnableAccessibilityThroughDom();
+			await UITestHelper.Load(panel);
+			await UITestHelper.WaitFor(() => SemanticElementExists(action), timeoutMS: 5000,
+				message: "Timed out waiting for the independent button control.");
+			Assert.AreEqual("button", GetSemanticElementTagName(action));
+			Assert.AreEqual("Tap", GetSemanticAttribute(action, "aria-label"));
+
+			await UITestHelper.WaitFor(() => SemanticElementExists(text), timeoutMS: 5000,
+				message: "Body text was absorbed by a role-less non-scrollable pane.");
+
+			Assert.AreEqual("p", GetSemanticElementTagName(text));
+			Assert.AreEqual(text.Text, GetSemanticTextContent(text));
+
+			text.Text = "MAUI event handled through the packaged Uno runtime";
+			await UITestHelper.WaitFor(() => GetSemanticTextContent(text) == text.Text, timeoutMS: 5000,
+				message: "Timed out waiting for the body-text paragraph to follow Text.");
+
+			Assert.AreEqual("Tap", GetSemanticAttribute(action, "aria-label"));
+		}
+		finally
+		{
+			TestServices.WindowHelper.WindowContent = null;
+		}
+#endif
+	}
+
+	[TestMethod]
+	[PlatformCondition(ConditionMode.Include, RuntimeTestPlatforms.SkiaWasm)]
+	public async Task When_Body_Text_Is_Inside_Generic_Peer_Then_Remains_Standalone()
+	{
+#if __SKIA__
+		var text = new TextBlock { Text = "Generic initial text" };
+		var action = new Button { Content = "Generic action" };
+		var panel = new GenericPeerPanel { Width = 320, Height = 120, Children = { text, action } };
+		try
+		{
+			EnableAccessibilityThroughDom();
+			await UITestHelper.Load(panel);
+			await UITestHelper.WaitFor(() => SemanticElementExists(action), timeoutMS: 5000,
+				message: "Timed out waiting for the generic peer's independent button.");
+			Assert.AreEqual("button", GetSemanticElementTagName(action));
+			Assert.AreEqual("Generic action", GetSemanticAttribute(action, "aria-label"));
+
+			await UITestHelper.WaitFor(() => SemanticElementExists(text), timeoutMS: 5000,
+				message: "Body text was absorbed by a name-prohibited generic peer.");
+
+			Assert.AreEqual("p", GetSemanticElementTagName(text));
+			Assert.AreEqual(text.Text, GetSemanticTextContent(text));
+
+			text.Text = "Generic updated text";
+			await UITestHelper.WaitFor(() => GetSemanticTextContent(text) == text.Text, timeoutMS: 5000,
+				message: "Timed out waiting for the generic peer's body-text paragraph to follow Text.");
+
+			Assert.AreEqual("Generic action", GetSemanticAttribute(action, "aria-label"));
+		}
+		finally
+		{
+			TestServices.WindowHelper.WindowContent = null;
+		}
+#endif
+	}
+
+	[TestMethod]
+	[PlatformCondition(ConditionMode.Include, RuntimeTestPlatforms.SkiaWasm)]
 	public async Task When_Absorbed_Text_Is_Reparented_Then_Both_Names_Refresh()
 	{
 #if __SKIA__
@@ -157,7 +229,28 @@ public class Given_DerivedAncestorNames
 #if __SKIA__
 	private sealed partial class PeerPanel : StackPanel
 	{
+		protected override AutomationPeer OnCreateAutomationPeer() => new GroupAutomationPeer(this);
+	}
+
+	private sealed partial class GenericPeerPanel : StackPanel
+	{
 		protected override AutomationPeer OnCreateAutomationPeer() => new FrameworkElementAutomationPeer(this);
+	}
+
+	private sealed partial class PanePeerPanel : StackPanel
+	{
+		protected override AutomationPeer OnCreateAutomationPeer() => new PaneAutomationPeer(this);
+	}
+
+	private sealed class PaneAutomationPeer(PanePeerPanel owner) : FrameworkElementAutomationPeer(owner)
+	{
+		protected override AutomationControlType GetAutomationControlTypeCore() => AutomationControlType.Pane;
+		protected override bool IsControlElementCore() => true;
+	}
+
+	private sealed class GroupAutomationPeer(PeerPanel owner) : FrameworkElementAutomationPeer(owner)
+	{
+		protected override AutomationControlType GetAutomationControlTypeCore() => AutomationControlType.Group;
 	}
 #endif
 }

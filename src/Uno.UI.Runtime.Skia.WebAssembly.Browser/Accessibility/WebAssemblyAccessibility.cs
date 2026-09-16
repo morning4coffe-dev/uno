@@ -1718,12 +1718,63 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 				var name = AriaMapper.ResolveLabel(peer);
 				if (!string.IsNullOrEmpty(name))
 				{
-					return string.Equals(name, ownText, StringComparison.Ordinal);
+					if (!string.Equals(name, ownText, StringComparison.Ordinal))
+					{
+						return false;
+					}
+
+					if (CanExposeAbsorbedName(node, peer, name))
+					{
+						return true;
+					}
 				}
 			}
 		}
 
 		return false;
+	}
+
+	private static bool CanExposeAbsorbedName(UIElement owner, AutomationPeer peer, string resolvedName)
+	{
+		var role = ResolveGenericSemanticRole(owner, peer, resolvedName);
+		return role is not (null or "" or "generic" or "none" or "presentation");
+	}
+
+	private static string? ResolveGenericSemanticRole(UIElement owner, AutomationPeer? peer, string? resolvedName)
+	{
+		var role = (peer is not null
+			? AriaMapper.GetAriaRole(peer.GetAutomationControlType())
+			: null)
+			?? AutomationProperties.FindHtmlRole(owner);
+		if (owner is ContentDialog)
+		{
+			role = "dialog";
+		}
+		else if (owner is ContentDialogPopupPanel or Popup { Child: ContentDialog })
+		{
+			role = null;
+		}
+
+		if (string.Equals(role, "region", StringComparison.Ordinal) &&
+			!AriaMapper.QualifiesAsNamedScrollRegion(peer, owner))
+		{
+			role = null;
+		}
+
+		if (string.IsNullOrEmpty(role) &&
+			!string.IsNullOrEmpty(AutomationProperties.GetName(owner)))
+		{
+			role = "group";
+		}
+
+		var landmarkRole = AriaMapper.GetLandmarkRole(AutomationProperties.GetLandmarkType(owner));
+		if (!string.IsNullOrEmpty(landmarkRole) &&
+			(landmarkRole is not ("region" or "form") || !string.IsNullOrEmpty(resolvedName)))
+		{
+			role = landmarkRole;
+		}
+
+		return role;
 	}
 
 	/// <summary>
@@ -1926,56 +1977,10 @@ internal partial class WebAssemblyAccessibility : SkiaAccessibilityBase
 		}
 		var hasAccessibleName = !string.IsNullOrEmpty(resolvedName);
 
-		// Fall back to generic semantic element for unsupported control types.
-		// Prefer AriaMapper role (covers Image, Group, etc.) over FindHtmlRole.
-		var role = (automationPeer is not null
-			? AriaMapper.GetAriaRole(automationPeer.GetAutomationControlType())
-			: null)
-			?? AutomationProperties.FindHtmlRole(child);
-		if (child is ContentDialog)
-		{
-			role = "dialog";
-		}
-		else if (child is ContentDialogPopupPanel or Popup { Child: ContentDialog })
-		{
-			role = null;
-		}
-
-		// FR-013/FR-014: a ScrollViewer (control type Pane → "region") only earns role=region when it
-		// is actually scrollable AND named. A non-scrollable or unnamed ScrollViewer must NOT become an
-		// (unlabeled) landmark — drop the region role so it renders as a plain structural <div>.
-		if (string.Equals(role, "region", StringComparison.Ordinal) &&
-			!AriaMapper.QualifiesAsNamedScrollRegion(automationPeer, child))
-		{
-			role = null;
-		}
-
-		// Containers with AutomationProperties.Name but no peer/role act as accessible groups.
-		// This matches WinUI3 where named containers create UIA Group elements.
-		if (string.IsNullOrEmpty(role))
-		{
-			var automationName = AutomationProperties.GetName(child);
-			if (!string.IsNullOrEmpty(automationName))
-			{
-				role = "group";
-			}
-		}
-
-		// Elements with a LandmarkType get the corresponding ARIA landmark role.
-		// This overrides any other role since landmarks are a higher-level semantic.
-		// FR-014: region/form landmarks are only exposed when named (an unnamed region/form is not a
-		// landmark; axe "region must have a name"). main/navigation/search are top-level landmarks
-		// identified by role alone and keep their role even when unnamed.
+		// Keep role selection shared with body-text absorption so text is suppressed only when the
+		// role emitted here can expose the resolved name.
+		var role = ResolveGenericSemanticRole(child, automationPeer, resolvedName);
 		var landmarkType = AutomationProperties.GetLandmarkType(child);
-		if (landmarkType != AutomationLandmarkType.None)
-		{
-			var landmarkRole = AriaMapper.GetLandmarkRole(landmarkType);
-			if (!string.IsNullOrEmpty(landmarkRole)
-				&& (landmarkRole is not ("region" or "form") || hasAccessibleName))
-			{
-				role = landmarkRole;
-			}
-		}
 
 		// The accessible name (aria-label) comes ONLY from the resolved name (ResolveLabel).
 		// AutomationId is surfaced separately as the xamlautomationid attribute and
