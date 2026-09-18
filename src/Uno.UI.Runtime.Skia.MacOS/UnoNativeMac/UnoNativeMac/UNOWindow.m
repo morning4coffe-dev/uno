@@ -63,9 +63,9 @@ void uno_set_drawing_callbacks(metal_draw_fn_ptr metal, soft_draw_fn_ptr soft, u
 
     CGSize s = [screen convertRectToBacking:screen.frame].size;
 #if DEBUG
-    NSLog(@"    ScreenHeightInRawPixels %g ScreenWidthInRawPixels %g RawPixelsPerViewPixel %g", s.height, s.width, screen.backingScaleFactor);
+    NSLog(@"    ScreenWidthInRawPixels %g ScreenHeightInRawPixels %g RawPixelsPerViewPixel %g", s.width, s.height, screen.backingScaleFactor);
 #endif
-    uno_get_window_did_change_screen_callback()(window, (uint)s.height, (uint)s.width, screen.backingScaleFactor);
+    uno_get_window_did_change_screen_callback()(window, (uint)s.width, (uint)s.height, screen.backingScaleFactor);
 }
 
 - (void) applicationDidChangeScreenParametersNotification:(NSNotification*) note
